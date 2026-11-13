@@ -1,6 +1,6 @@
 # social-media-assets
 
-Εικόνες, βίντεο και πρόγραμμα (`queue.json`) για τις αυτόματες δημοσιεύσεις στο Instagram της **NDT** (@newdjsteam) και της **Amaze DJs** (@amaze.djs).
+Εικόνες, βίντεο και πρόγραμμα (`queue.json`) για τις αυτόματες δημοσιεύσεις στο Instagram και στις σελίδες Facebook της **NDT** (@newdjsteam) και της **Amaze DJs** (@amaze.djs).
 
 Το repo είναι δημόσιο, γιατί το Instagram Graph API κατεβάζει τα αρχεία από δημόσιο link τη στιγμή της δημοσίευσης. Εδώ μπαίνει μόνο περιεχόμενο που έχει ήδη εγκριθεί. Είναι ανεξάρτητο από το NDT OPS.
 
@@ -17,7 +17,7 @@ publisher/appsscript.json  manifest του Apps Script
 ## Εγκατάσταση (μία φορά, ~20 λεπτά)
 
 ### 1. Token από το Meta
-Χρειάζεσαι token με δικαιώματα `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` (και `business_management` αν είναι System User).
+Χρειάζεσαι token με δικαιώματα `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts` (και `business_management` αν είναι System User).
 
 - **Αν το token του Ops τα έχει ήδη:** το αντιγράφεις όπως είναι. Μην το ξαναδημιουργήσεις.
 - **Αλλιώς, προτεινόμενο:** ξεχωριστό token που δεν λήγει, μέσω System User.
@@ -36,12 +36,15 @@ publisher/appsscript.json  manifest του Apps Script
 ### 3. IDs λογαριασμών
 1. Στον επεξεργαστή επιλέγεις `findInstagramIds` → Εκτέλεση. Την πρώτη φορά ζητάει άδειες: τις δίνεις.
 2. Στο αρχείο καταγραφής βλέπεις τα IDs. Προσθέτεις στις Ιδιότητες σεναρίου:
-   - `IG_USER_NDT` = το ID του newdjsteam
-   - `IG_USER_AMAZE` = το ID του amaze.djs
+   - `IG_USER_NDT` = το Instagram ID του newdjsteam
+   - `IG_USER_AMAZE` = το Instagram ID του amaze.djs
+   - `FB_PAGE_NDT` = το Facebook Page ID της NDT
+   - `FB_PAGE_AMAZE` = το Facebook Page ID της Amaze
+   Αν δεν βάλεις `FB_PAGE_…`, εκείνο το brand ανεβαίνει μόνο στο Instagram.
 
 ### 4. Έλεγχος χωρίς δημοσίευση
-1. `checkSetup` → πρέπει να δείξει @newdjsteam, @amaze.djs και «προβληματικά αρχεία: 0».
-2. `dryRun` → πρέπει να γράψει «OK … ΔΕΝ δημοσιεύτηκε τίποτα».
+1. `checkSetup` → πρέπει να δείξει «Δικαιώματα token: όλα εντάξει», @newdjsteam, @amaze.djs, τις δύο σελίδες Facebook και «προβληματικά αρχεία: 0».
+2. `dryRun` → πρέπει να γράψει «Instagram OK» και «Facebook OK … ΔΕΝ δημοσιεύτηκε τίποτα».
 
 ### 5. Ενεργοποίηση
 `setup` → από εδώ και πέρα ελέγχει κάθε 10 λεπτά και δημοσιεύει ό,τι έφτασε η ώρα του.
@@ -50,4 +53,5 @@ publisher/appsscript.json  manifest του Apps Script
 - Καρτέλα **Ουρά** στο Sheet: όλο το πρόγραμμα με την κατάσταση κάθε δημοσίευσης και link.
 - Καρτέλα **Ιστορικό**: κάθε δημοσίευση ή σφάλμα με την ώρα του.
 - Σε σφάλμα έρχεται email. Μετά από 3 αποτυχίες ή καθυστέρηση πάνω από 3 ώρες, η δημοσίευση παραλείπεται, ώστε να μη βγει ποτέ διπλή.
-- `pause()` σταματάει τα πάντα, `resume()` συνεχίζει.
+- Instagram και Facebook παρακολουθούνται χωριστά: αν αποτύχει το ένα, το άλλο δεν ξαναδημοσιεύεται.
+- `pause()` σταματάει τα πάντα, `resume()` συνεχίζει. Για να σταματήσει μόνο το Facebook: Ιδιότητα σεναρίου `FB_ENABLED` = `false`.

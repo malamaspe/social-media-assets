@@ -1,21 +1,26 @@
 /**
  * IG Publisher — NDT & Amaze DJs
  *
- * Δημοσιεύει στο Instagram (post, carousel, story, reel) μέσω του Instagram Graph API,
+ * Δημοσιεύει στο Instagram (post, carousel, story, reel) μέσω του Instagram Graph API
+ * και, αν έχει οριστεί σελίδα, τα ίδια και στη σελίδα Facebook (post, πολλαπλές φωτογραφίες, story, reel),
  * σύμφωνα με το queue.json του repo malamaspe/social-media-assets.
  * Ανεξάρτητο από το NDT OPS: δικό του project, δικό του Sheet, δικά του Script Properties.
  *
  * Script Properties (Project Settings → Script Properties):
- *   IG_TOKEN        access token με instagram_basic + instagram_content_publish (+ pages_show_list, pages_read_engagement)
+ *   IG_TOKEN        access token με instagram_basic, instagram_content_publish, pages_show_list,
+ *                   pages_read_engagement, pages_manage_posts (+ business_management αν είναι System User)
  *   IG_USER_NDT     Instagram Business Account ID του newdjsteam
  *   IG_USER_AMAZE   Instagram Business Account ID του amaze.djs
+ *   FB_PAGE_NDT     Facebook Page ID της NDT   (κενό = όχι Facebook για την NDT)
+ *   FB_PAGE_AMAZE   Facebook Page ID της Amaze (κενό = όχι Facebook για την Amaze)
+ *   FB_ENABLED      false για να σταματήσει μόνο το Facebook
  *   GRAPH_VERSION   προαιρετικό, π.χ. v23.0 (κενό = η έκδοση του Meta app)
  *   PAUSED          true για παύση όλων των δημοσιεύσεων
  *
  * Συναρτήσεις που τρέχεις με το χέρι:
- *   findInstagramIds()  βρίσκει τα IDs των λογαριασμών Instagram
- *   checkSetup()        ελέγχει token, λογαριασμούς, ουρά και εικόνες
- *   dryRun()            φτιάχνει container για το επόμενο post ΧΩΡΙΣ να δημοσιεύσει
+ *   findInstagramIds()  βρίσκει τα IDs των λογαριασμών Instagram και των σελίδων Facebook
+ *   checkSetup()        ελέγχει token, δικαιώματα, λογαριασμούς, ουρά και αρχεία
+ *   dryRun()            δοκιμή στο επόμενο post ΧΩΡΙΣ να δημοσιεύσει τίποτα
  *   setup()             βάζει τον αυτόματο έλεγχο κάθε 10 λεπτά
  *   pause() / resume()  παύση / συνέχεια
  */
@@ -49,8 +54,8 @@ function base_() {
   return v ? CFG.GRAPH + '/' + v : CFG.GRAPH;
 }
 
-function api_(method, path, params) {
-  const p = Object.assign({}, params || {}, { access_token: token_() });
+function api_(method, path, params, tok) {
+  const p = Object.assign({}, params || {}, { access_token: tok || token_() });
   let url = base_() + '/' + path;
   const opt = { method: method, muteHttpExceptions: true };
   if (method === 'get') {
@@ -83,7 +88,7 @@ function fetchQueue_() {
   return q;
 }
 
-// ------------------------------------------------------------------ publishing
+// ------------------------------------------------------------------ Instagram
 function createContainer_(igId, params) {
   return api_('post', igId + '/media', params).id;
 }
@@ -137,7 +142,81 @@ function publishItem_(item) {
   return { mediaId: r.id, permalink: link };
 }
 
+// ------------------------------------------------------------------ Facebook
+function fbPageId_(account) { return prop_('FB_PAGE_' + account, ''); }
+
+function fbEnabled_(item) {
+  if (prop_('FB_ENABLED', 'true') === 'false') return false;
+  if (!fbPageId_(item.account)) return false;
+  return !item.platforms || item.platforms.indexOf('facebook') >= 0;
+}
+
+function pageToken_(pageId) {
+  const cache = CacheService.getScriptCache();
+  const k = 'pt_' + pageId;
+  const c = cache.get(k);
+  if (c) return c;
+  let t = '';
+  try { t = api_('get', pageId, { fields: 'access_token' }).access_token || ''; } catch (e) { console.log('page token: ' + e.message); }
+  if (!t) t = token_();
+  cache.put(k, t, 21600);
+  return t;
+}
+
+// Βίντεο στο Facebook (reel ή video story): start → upload από URL → finish
+function fbVideo_(pid, pt, edge, videoUrl, desc) {
+  const st = api_('post', pid + '/' + edge, { upload_phase: 'start' }, pt);
+  const up = UrlFetchApp.fetch(st.upload_url, {
+    method: 'post', muteHttpExceptions: true,
+    headers: { Authorization: 'OAuth ' + pt, file_url: videoUrl },
+  });
+  if (up.getResponseCode() >= 400) throw new Error('FB upload ' + up.getResponseCode() + ': ' + up.getContentText());
+  const fin = { upload_phase: 'finish', video_id: st.video_id };
+  if (edge === 'video_reels') { fin.video_state = 'PUBLISHED'; fin.description = desc || ''; }
+  const r = api_('post', pid + '/' + edge, fin, pt);
+  return { id: r.post_id || st.video_id, link: '' };
+}
+
+function publishFb_(item) {
+  const pid = fbPageId_(item.account);
+  const pt = pageToken_(pid);
+  const cap = item.fb_caption || item.caption || '';
+  switch (item.type) {
+    case 'IMAGE': {
+      const r = api_('post', pid + '/photos', { url: item.images[0], message: cap, published: 'true' }, pt);
+      return { id: r.post_id || r.id, link: 'https://www.facebook.com/' + (r.post_id || r.id) };
+    }
+    case 'CAROUSEL': {
+      const p = { message: cap };
+      item.images.forEach(function (u, i) {
+        const ph = api_('post', pid + '/photos', { url: u, published: 'false' }, pt);
+        p['attached_media[' + i + ']'] = JSON.stringify({ media_fbid: ph.id });
+      });
+      const r = api_('post', pid + '/feed', p, pt);
+      return { id: r.id, link: 'https://www.facebook.com/' + r.id };
+    }
+    case 'STORY': {
+      if (item.video) return fbVideo_(pid, pt, 'video_stories', item.video, '');
+      const ph = api_('post', pid + '/photos', { url: item.images[0], published: 'false' }, pt);
+      const r = api_('post', pid + '/photo_stories', { photo_id: ph.id }, pt);
+      return { id: r.post_id || ph.id, link: '' };
+    }
+    case 'REEL':
+      return fbVideo_(pid, pt, 'video_reels', item.video, cap);
+    default:
+      throw new Error('Άγνωστος τύπος: ' + item.type);
+  }
+}
+
 // ------------------------------------------------------------------ main loop (trigger)
+// Instagram και Facebook παρακολουθούνται χωριστά: αν αποτύχει το ένα, το άλλο δεν ξαναδημοσιεύεται.
+// Κλειδιά: Instagram done_/fail_/skip_<id>, Facebook fbdone_/fbfail_/fbskip_<id>
+function targets_(item) {
+  const t = [{ pre: '', label: 'Instagram', fn: publishItem_, link: function (r) { return r.permalink || r.mediaId; } }];
+  if (fbEnabled_(item)) t.push({ pre: 'fb', label: 'Facebook', fn: publishFb_, link: function (r) { return r.link || r.id; } });
+  return t;
+}
+
 function run() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
@@ -147,30 +226,34 @@ function run() {
     const S = P_();
     const now = new Date();
     q.items.forEach(function (item) {
-      if (S.getProperty('done_' + item.id) || S.getProperty('skip_' + item.id)) return;
       const when = new Date(item.publish_at);
       if (when > now) return;
       const late = (now - when) / 60000;
-      if (late > CFG.LATE_LIMIT_MIN) {
-        S.setProperty('skip_' + item.id, now.toISOString());
-        log_(item, 'ΠΑΡΑΛΕΙΦΘΗΚΕ', 'Καθυστέρηση ' + Math.round(late) + ' λεπτά');
-        notify_('Παραλείφθηκε ' + item.id, 'Το ' + item.id + ' δεν δημοσιεύτηκε γιατί πέρασαν ' + Math.round(late) + ' λεπτά από την ώρα του.');
-        return;
-      }
-      try {
-        const r = publishItem_(item);
-        S.setProperty('done_' + item.id, JSON.stringify({ at: new Date().toISOString(), media: r.mediaId, link: r.permalink }));
-        S.deleteProperty('fail_' + item.id);
-        log_(item, 'ΔΗΜΟΣΙΕΥΤΗΚΕ', r.permalink || r.mediaId);
-      } catch (e) {
-        const n = Number(S.getProperty('fail_' + item.id) || 0) + 1;
-        S.setProperty('fail_' + item.id, String(n));
-        log_(item, 'ΣΦΑΛΜΑ ' + n + '/' + CFG.MAX_FAILS, e.message);
-        if (n >= CFG.MAX_FAILS) {
-          S.setProperty('skip_' + item.id, now.toISOString());
-          notify_('Απέτυχε ' + item.id, 'Το ' + item.id + ' απέτυχε ' + n + ' φορές και δεν θα ξαναδοκιμαστεί.\n\n' + e.message);
+      targets_(item).forEach(function (t) {
+        const kd = t.pre + 'done_' + item.id, ks = t.pre + 'skip_' + item.id, kf = t.pre + 'fail_' + item.id;
+        if (S.getProperty(kd) || S.getProperty(ks)) return;
+        if (late > CFG.LATE_LIMIT_MIN) {
+          S.setProperty(ks, now.toISOString());
+          log_(item, t.label + ': ΠΑΡΑΛΕΙΦΘΗΚΕ', 'Καθυστέρηση ' + Math.round(late) + ' λεπτά');
+          notify_('Παραλείφθηκε ' + item.id + ' (' + t.label + ')', 'Το ' + item.id + ' δεν δημοσιεύτηκε στο ' + t.label + ' γιατί πέρασαν ' + Math.round(late) + ' λεπτά από την ώρα του.');
+          return;
         }
-      }
+        try {
+          const r = t.fn(item);
+          const link = t.link(r);
+          S.setProperty(kd, JSON.stringify({ at: new Date().toISOString(), link: link }));
+          S.deleteProperty(kf);
+          log_(item, t.label + ': ΔΗΜΟΣΙΕΥΤΗΚΕ', link);
+        } catch (e) {
+          const n = Number(S.getProperty(kf) || 0) + 1;
+          S.setProperty(kf, String(n));
+          log_(item, t.label + ': ΣΦΑΛΜΑ ' + n + '/' + CFG.MAX_FAILS, e.message);
+          if (n >= CFG.MAX_FAILS) {
+            S.setProperty(ks, now.toISOString());
+            notify_('Απέτυχε ' + item.id + ' (' + t.label + ')', 'Το ' + item.id + ' απέτυχε ' + n + ' φορές στο ' + t.label + ' και δεν θα ξαναδοκιμαστεί.\n\n' + e.message);
+          }
+        }
+      });
     });
     syncSheet_(q);
   } catch (e) {
@@ -198,21 +281,28 @@ function log_(item, status, detail) {
   sh.appendRow([new Date(), item.id, item.account, item.type, status, String(detail || '').slice(0, 500)]);
 }
 
+function status_(S, pre, id) {
+  const done = S.getProperty(pre + 'done_' + id), skip = S.getProperty(pre + 'skip_' + id), fail = S.getProperty(pre + 'fail_' + id);
+  if (done) { let l = ''; try { l = JSON.parse(done).link || ''; } catch (e) {} return ['Δημοσιεύτηκε', l]; }
+  if (skip) return ['Δεν δημοσιεύτηκε', ''];
+  if (fail) return ['Σφάλμα (' + fail + ')', ''];
+  return ['Σε αναμονή', ''];
+}
+
 function syncSheet_(q) {
-  const sh = sheet_('Ουρά', ['Ώρα δημοσίευσης', 'Λογαριασμός', 'Τύπος', 'Λεζάντα', 'Αρχεία', 'Κατάσταση', 'Link', 'ID']);
+  const H = ['Ώρα δημοσίευσης', 'Λογαριασμός', 'Τύπος', 'Λεζάντα', 'Αρχεία', 'Instagram', 'Link Instagram', 'Facebook', 'Link Facebook', 'ID'];
+  const sh = sheet_('Ουρά', H);
+  sh.getRange(1, 1, 1, H.length).setValues([H]).setFontWeight('bold');
   const S = P_();
   const rows = q.items.map(function (it) {
-    const done = S.getProperty('done_' + it.id), skip = S.getProperty('skip_' + it.id), fail = S.getProperty('fail_' + it.id);
-    let status = 'Σε αναμονή', link = '';
-    if (done) { status = 'Δημοσιεύτηκε'; try { link = JSON.parse(done).link || ''; } catch (e) {} }
-    else if (skip) status = 'Δεν δημοσιεύτηκε';
-    else if (fail) status = 'Σφάλμα (' + fail + ')';
+    const ig = status_(S, '', it.id);
+    const fb = fbEnabled_(it) ? status_(S, 'fb', it.id) : ['—', ''];
     const files = (it.images || []).length + (it.video ? 1 : 0);
-    return [new Date(it.publish_at), it.account, it.type, String(it.caption || '').slice(0, 120), files, status, link, it.id];
+    return [new Date(it.publish_at), it.account, it.type, String(it.caption || '').slice(0, 120), files, ig[0], ig[1], fb[0], fb[1], it.id];
   });
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 8).clearContent();
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, H.length).clearContent();
   if (rows.length) {
-    sh.getRange(2, 1, rows.length, 8).setValues(rows);
+    sh.getRange(2, 1, rows.length, H.length).setValues(rows);
     sh.getRange(2, 1, rows.length, 1).setNumberFormat('ddd dd/MM HH:mm');
   }
 }
@@ -220,20 +310,28 @@ function syncSheet_(q) {
 // ------------------------------------------------------------------ manual helpers
 function findInstagramIds() {
   try {
-    const r = api_('get', 'me/accounts', { fields: 'name,instagram_business_account{id,username}' });
+    const r = api_('get', 'me/accounts', { fields: 'name,id,instagram_business_account{id,username}' });
     (r.data || []).forEach(function (p) {
       const ig = p.instagram_business_account;
-      console.log(p.name + ' → ' + (ig ? ig.username + '  ID: ' + ig.id : '(χωρίς Instagram)'));
+      console.log(p.name + '\n   Facebook Page ID: ' + p.id + '\n   Instagram: ' + (ig ? '@' + ig.username + '  ID: ' + ig.id : '(χωρίς Instagram)'));
     });
   } catch (e) {
     console.log('me/accounts: ' + e.message);
-    const r = api_('get', 'me', { fields: 'name,instagram_business_account{id,username}' });
+    const r = api_('get', 'me', { fields: 'name,id,instagram_business_account{id,username}' });
     const ig = r.instagram_business_account;
-    console.log(r.name + ' → ' + (ig ? ig.username + '  ID: ' + ig.id : '(χωρίς Instagram)'));
+    console.log(r.name + ' (ID ' + r.id + ') → ' + (ig ? '@' + ig.username + '  ID: ' + ig.id : '(χωρίς Instagram)'));
   }
 }
 
 function checkSetup() {
+  try {
+    const perms = (api_('get', 'me/permissions', {}).data || [])
+      .filter(function (p) { return p.status === 'granted'; }).map(function (p) { return p.permission; });
+    const need = ['instagram_basic', 'instagram_content_publish', 'pages_show_list', 'pages_read_engagement', 'pages_manage_posts'];
+    const miss = need.filter(function (n) { return perms.indexOf(n) < 0; });
+    console.log('Δικαιώματα token: ' + (miss.length ? 'ΛΕΙΠΟΥΝ ' + miss.join(', ') : 'όλα εντάξει'));
+  } catch (e) { console.log('Δικαιώματα: δεν ελέγχθηκαν (' + e.message + ')'); }
+
   ['NDT', 'AMAZE'].forEach(function (acc) {
     const id = igUserId_(acc);
     const u = api_('get', id, { fields: 'username,followers_count' });
@@ -242,15 +340,21 @@ function checkSetup() {
       const l = api_('get', id + '/content_publishing_limit', { fields: 'quota_usage,config' });
       lim = JSON.stringify(l.data || l);
     } catch (e) { lim = '(όριο: ' + e.message + ')'; }
-    console.log(acc + ': @' + u.username + ' (' + u.followers_count + ' ακόλουθοι) ' + lim);
+    console.log(acc + ' Instagram: @' + u.username + ' (' + u.followers_count + ' ακόλουθοι) ' + lim);
+    const pid = fbPageId_(acc);
+    if (!pid) { console.log(acc + ' Facebook: δεν έχει οριστεί FB_PAGE_' + acc + ' (μόνο Instagram)'); return; }
+    try {
+      const pg = api_('get', pid, { fields: 'name,followers_count' }, pageToken_(pid));
+      console.log(acc + ' Facebook: ' + pg.name + ' (' + (pg.followers_count || 0) + ' ακόλουθοι)');
+    } catch (e) { console.log(acc + ' Facebook: ΣΦΑΛΜΑ ' + e.message); }
   });
+
   const q = fetchQueue_();
   let bad = 0;
   q.items.forEach(function (it) {
     (it.images || []).concat(it.video ? [it.video] : []).forEach(function (url) {
       const r = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true, followRedirects: true });
-      const ok = r.getResponseCode() === 200;
-      if (!ok) { bad++; console.log('ΛΑΘΟΣ ' + r.getResponseCode() + ': ' + url); }
+      if (r.getResponseCode() !== 200) { bad++; console.log('ΛΑΘΟΣ ' + r.getResponseCode() + ': ' + url); }
     });
   });
   console.log('Ουρά: ' + q.items.length + ' δημοσιεύσεις, προβληματικά αρχεία: ' + bad);
@@ -261,14 +365,20 @@ function dryRun() {
   const q = fetchQueue_();
   const S = P_();
   const now = new Date();
-  const next = q.items.filter(function (it) { return !S.getProperty('done_' + it.id) && new Date(it.publish_at) > now; })[0];
-  if (!next) { console.log('Δεν υπάρχει επόμενη δημοσίευση στην ουρά.'); return; }
+  const next = q.items.filter(function (it) { return !S.getProperty('done_' + it.id) && new Date(it.publish_at) > now && it.images && it.images.length; })[0];
+  if (!next) { console.log('Δεν υπάρχει επόμενη δημοσίευση με εικόνα στην ουρά.'); return; }
   const ig = igUserId_(next.account);
   const c = next.type === 'STORY'
     ? createContainer_(ig, { image_url: next.images[0], media_type: 'STORIES' })
     : createContainer_(ig, { image_url: next.images[0], caption: 'dry run' });
   waitReady_(c);
-  console.log('OK: το Instagram δέχτηκε την εικόνα του ' + next.id + ' (container ' + c + '). ΔΕΝ δημοσιεύτηκε τίποτα.');
+  console.log('Instagram OK: δέχτηκε την εικόνα του ' + next.id + ' (container ' + c + '). ΔΕΝ δημοσιεύτηκε τίποτα.');
+  if (fbEnabled_(next)) {
+    const pid = fbPageId_(next.account), pt = pageToken_(pid);
+    const ph = api_('post', pid + '/photos', { url: next.images[0], published: 'false' }, pt);
+    try { api_('post', ph.id, { method: 'delete' }, pt); } catch (e) { /* μένει αδημοσίευτη, δεν φαίνεται πουθενά */ }
+    console.log('Facebook OK: η σελίδα δέχτηκε την εικόνα (αδημοσίευτη, σβήστηκε). ΔΕΝ δημοσιεύτηκε τίποτα.');
+  }
 }
 
 function setup() {
