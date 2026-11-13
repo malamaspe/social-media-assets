@@ -17,33 +17,31 @@ publisher/appsscript.json  manifest του Apps Script
 ## Εγκατάσταση (μία φορά, ~20 λεπτά)
 
 ### 1. Token από το Meta
-Χρειάζεσαι token με δικαιώματα `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts` (και `business_management` αν είναι System User).
+Εφαρμογή Meta: **NDT Social Publisher** (Live), με τα use cases «Manage everything on your Page» και «Manage messaging & content on Instagram» (API setup with Facebook login). Χρειάζονται τα δικαιώματα `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `business_management`.
 
-- **Αν το token του Ops τα έχει ήδη:** το αντιγράφεις όπως είναι. Μην το ξαναδημιουργήσεις.
-- **Αλλιώς, προτεινόμενο:** ξεχωριστό token που δεν λήγει, μέσω System User.
-  1. business.facebook.com → Ρυθμίσεις επιχείρησης → Χρήστες → Χρήστες συστήματος → Προσθήκη (ρόλος Admin).
-  2. «Ανάθεση στοιχείων»: οι σελίδες NDT Event Production και Amaze Djs, και τα δύο Instagram (πλήρης έλεγχος).
-  3. «Δημιουργία νέου διακριτικού»: διαλέγεις το Meta app σου, λήξη «Ποτέ», και τσεκάρεις τα δικαιώματα παραπάνω.
-  4. Αντιγράφεις το token. Το token του Ops μένει ανέγγιχτο.
+**Τρόπος Α (προτεινόμενος, χωρίς SMS): μόνιμα tokens σελίδας**
+1. developers.facebook.com/tools/explorer → Meta App: **NDT Social Publisher** → «User or Page»: **User Token** → πρόσθεσε τα 6 δικαιώματα → **Generate Access Token** → στο παράθυρο του Facebook επίλεξε τις δύο σελίδες και τα δύο Instagram → Συνέχεια.
+2. Αντέγραψε το token → developers.facebook.com/tools/debug/accesstoken → **Debug** → κάτω κάτω **Extend Access Token** → αντέγραψε το νέο token (λήγει σε ~60 μέρες, είναι μόνο ενδιάμεσο).
+3. Πίσω στο Graph API Explorer: επικόλλησε το νέο token στο πεδίο Access Token, γράψε στο ερώτημα `me/accounts?fields=name,access_token` → **Submit**.
+4. Για κάθε σελίδα αντιγράφεις το `access_token` της. Στο Debugger πρέπει να γράφει **Type: Page, Expires: Never**.
+5. Στις Ιδιότητες σεναρίου: `TOKEN_NDT` = το token της NDT, `TOKEN_AMAZE` = το token της Amaze.
+
+Τα tokens σελίδας δεν λήγουν. Σταματούν μόνο αν αλλάξεις κωδικό στο Facebook ή χάσεις τον ρόλο σου στη σελίδα: τότε έρχεται email σφάλματος και επαναλαμβάνεις τα βήματα 1–5.
+
+**Τρόπος Β: System User token** (business.facebook.com/settings → Χρήστες συστήματος → NDTautopost → Δημιουργία διακριτικού, λήξη «Ποτέ», τα 6 δικαιώματα). Μπαίνει ως `IG_TOKEN`. Θέλει επαλήθευση με SMS.
 
 ### 2. Google Sheet + Apps Script
 1. Νέο Google Sheet με όνομα **IG Publisher**.
 2. Επεκτάσεις → Apps Script.
 3. Σβήνεις ό,τι υπάρχει στο `Code.gs` και επικολλάς το `publisher/Code.gs`.
 4. Ρυθμίσεις έργου (γρανάζι) → «Εμφάνιση αρχείου manifest appsscript.json» → επικολλάς το `publisher/appsscript.json`. Ζώνη ώρας: Athens.
-5. Ρυθμίσεις έργου → Ιδιότητες σεναρίου → προσθέτεις `IG_TOKEN` = το token.
+5. Ρυθμίσεις έργου → Ιδιότητες σεναρίου → προσθέτεις τα tokens του βήματος 1 (`TOKEN_NDT` και `TOKEN_AMAZE`, ή `IG_TOKEN`).
 
 ### 3. IDs λογαριασμών
-1. Στον επεξεργαστή επιλέγεις `findInstagramIds` → Εκτέλεση. Την πρώτη φορά ζητάει άδειες: τις δίνεις.
-2. Στο αρχείο καταγραφής βλέπεις τα IDs. Προσθέτεις στις Ιδιότητες σεναρίου:
-   - `IG_USER_NDT` = το Instagram ID του newdjsteam
-   - `IG_USER_AMAZE` = το Instagram ID του amaze.djs
-   - `FB_PAGE_NDT` = το Facebook Page ID της NDT
-   - `FB_PAGE_AMAZE` = το Facebook Page ID της Amaze
-   Αν δεν βάλεις `FB_PAGE_…`, εκείνο το brand ανεβαίνει μόνο στο Instagram.
+Στον επεξεργαστή επιλέγεις `findInstagramIds` → Εκτέλεση. Την πρώτη φορά ζητάει άδειες Google: τις δίνεις («Σύνθετες ρυθμίσεις → Μετάβαση στο IG Publisher» αν πει ότι δεν είναι επαληθευμένη). Βρίσκει και **αποθηκεύει μόνο του** τα `IG_USER_NDT`, `IG_USER_AMAZE`, `FB_PAGE_NDT`, `FB_PAGE_AMAZE`.
 
 ### 4. Έλεγχος χωρίς δημοσίευση
-1. `checkSetup` → πρέπει να δείξει «Δικαιώματα token: όλα εντάξει», @newdjsteam, @amaze.djs, τις δύο σελίδες Facebook και «προβληματικά αρχεία: 0».
+1. `checkSetup` → πρέπει να δείξει για κάθε token «δεν λήγει, δικαιώματα εντάξει», @newdjsteam, @amaze.djs, τις δύο σελίδες Facebook και «προβληματικά αρχεία: 0».
 2. `dryRun` → πρέπει να γράψει «Instagram OK» και «Facebook OK … ΔΕΝ δημοσιεύτηκε τίποτα».
 
 ### 5. Ενεργοποίηση
