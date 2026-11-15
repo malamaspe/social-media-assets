@@ -1,0 +1,5 @@
+assets/
+out/
+preview*/
+fonts/node_modules/
+__pycache__/
