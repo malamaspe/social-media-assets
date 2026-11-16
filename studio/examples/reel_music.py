@@ -76,7 +76,9 @@ def ndt_1208(tid):
     total = assemble('m1208n', list(zip([p[0] for p in plan], d)), tid, t0, out)
     print('NDT 8/12', round(total, 2), 's', LIB[tid]['title'], 'from', round(t0, 1), d)
 
-OUTRO_AMAZE = Path('/home/claude/ig/assets/amaze_outro_1080x1920.mp4')  # το κλιπ κλεισίματος της Amaze (A_LOGO_CLOSURE), 5.47″
+OUTRO_AMAZE = Path('/home/claude/ig/assets/amaze_outro_1080x1920.mp4')  # outro 1: A_LOGO_CLOSURE (λογότυπο → «LET US AMAZE YOU»), 5.47″
+OUTRO_AMAZE_2 = Path('/home/claude/ig/assets/amaze_outro2_1080x1920.mp4')  # outro 2: το λογότυπο από το A_LOGO_OPENING (0–2.75″, χωρίς «PRESENTS»), 2.77″
+# Εναλλάξ ανάμεσα στα δύο, ένα σε κάθε reel της Amaze.
 
 def outro_seg(name, src=OUTRO_AMAZE):
     rw.run(['ffmpeg', '-y', '-v', 'error', '-i', str(src), '-vf', f'scale={rw.W}:{rw.H},setsar=1,fps={rw.FPS}', *rw.ENC, '-an', str(rw.TMP / name)])
