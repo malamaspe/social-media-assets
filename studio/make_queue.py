@@ -1,7 +1,17 @@
 """Build queue.json entries for a rendered week and copy media into the repo working tree."""
 import json, glob, os, shutil, sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
+ATH = ZoneInfo('Europe/Athens')
 REPO_RAW = 'https://raw.githubusercontent.com/malamaspe/social-media-assets/main/'
 TIMES = {'NDT': ('20:00', '20:05'), 'AMAZE': ('21:00', '21:05')}
+# Προαιρετικά κείμενα για YouTube Shorts / TikTok ανά reel, στο captions.json με κλειδί '<BRAND>|<YYYY-MM-DD>|reel'.
+# Το Apps Script τα γράφει σε .txt δίπλα στο mp4, στον φάκελο Drive «ΥΛΙΚΟ SOCIAL MEDIA/REELS».
+REEL_META = ('title', 'yt_title', 'yt_description', 'tiktok_caption')
+
+def at(d, hm):
+    """Ώρα Αθήνας με τη σωστή μετατόπιση (χειμερινή/θερινή ώρα)."""
+    return datetime.fromisoformat(f'{d}T{hm}:00').replace(tzinfo=ATH).isoformat()
 
 def build(week_dir, repo_dir, month_folder, skip_reels=False):
     """month_folder: e.g. 2026-11, or 'auto' to use each day's own month."""
@@ -23,8 +33,10 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
                 pass  # το reel μπαίνει αργότερα (π.χ. περιμένει μουσική)
             elif os.path.exists(reel):
                 shutil.copy(reel, dst)
-                it = {'id': f'{brand}-{d}-post', 'account': brand, 'type': 'REEL', 'publish_at': f'{d}T{tp}:00+02:00',
+                it = {'id': f'{brand}-{d}-post', 'account': brand, 'type': 'REEL', 'publish_at': at(d, tp),
                       'video': url(reel), 'caption': caps[f'{brand}|{d}']}
+                meta = caps.get(f'{brand}|{d}|reel') or {}
+                it.update({k: meta[k] for k in REEL_META if meta.get(k)})
                 cover = f'{week_dir}/{brand}/{d}_reel_cover.jpg'
                 if os.path.exists(cover):
                     shutil.copy(cover, dst); it['cover'] = url(cover)
@@ -33,11 +45,11 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
                 for p in posts:
                     shutil.copy(p, dst)
                 items.append({'id': f'{brand}-{d}-post', 'account': brand, 'type': 'CAROUSEL' if len(posts) > 1 else 'IMAGE',
-                              'publish_at': f'{d}T{tp}:00+02:00', 'images': [url(p) for p in posts], 'caption': caps[f'{brand}|{d}']})
+                              'publish_at': at(d, tp), 'images': [url(p) for p in posts], 'caption': caps[f'{brand}|{d}']})
             for s in stories:
                 shutil.copy(s, dst)
                 items.append({'id': f'{brand}-{d}-story', 'account': brand, 'type': 'STORY',
-                              'publish_at': f'{d}T{ts}:00+02:00', 'images': [url(s)]})
+                              'publish_at': at(d, ts), 'images': [url(s)]})
     return items
 
 if __name__ == '__main__':

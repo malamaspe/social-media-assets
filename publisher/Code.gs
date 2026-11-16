@@ -20,12 +20,15 @@
  *   FB_ENABLED      false για να σταματήσει μόνο το Facebook
  *   GRAPH_VERSION   προαιρετικό, π.χ. v23.0 (κενό = η έκδοση του Meta app)
  *   PAUSED          true για παύση όλων των δημοσιεύσεων
+ *   REELS_FOLDER_ID το βρίσκει/φτιάχνει μόνο του (φάκελος «REELS» μέσα στο «ΥΛΙΚΟ SOCIAL MEDIA»)
  *
  * Συναρτήσεις που τρέχεις με το χέρι:
  *   findInstagramIds()  βρίσκει και αποθηκεύει μόνο του τα IDs Instagram και σελίδων Facebook
  *   checkSetup()        ελέγχει token, δικαιώματα, λογαριασμούς, ουρά και αρχεία
  *   dryRun()            δοκιμή στο επόμενο post ΧΩΡΙΣ να δημοσιεύσει τίποτα
  *   dryRunReel()        δοκιμή στο επόμενο reel κάθε brand (Instagram) ΧΩΡΙΣ να δημοσιεύσει τίποτα
+ *   syncReelsNow()      αντιγράφει τώρα τα reels της ουράς στο Drive (ΥΛΙΚΟ SOCIAL MEDIA/REELS), με .txt για
+ *                       YouTube Shorts / TikTok. Γίνεται και αυτόματα σε κάθε εκτέλεση του run().
  *   setup()             βάζει τον αυτόματο έλεγχο κάθε 10 λεπτά
  *   pause() / resume()  παύση / συνέχεια
  */
@@ -265,6 +268,7 @@ function run() {
       });
     });
     syncSheet_(q);
+    try { syncReelsToDrive_(q, 2); } catch (e) { console.log('Reels → Drive: ' + e.message); }
   } catch (e) {
     notify_('Σφάλμα εκτέλεσης', e.message);
     throw e;
@@ -427,6 +431,108 @@ function dryRunReel() {
     waitReady_(c, 50, 5000, tok);
     console.log(acc + ' Instagram OK: το reel ' + next.id + ' επεξεργάστηκε σωστά. ΔΕΝ δημοσιεύτηκε τίποτα.');
   });
+}
+
+// ------------------------------------------------------------------ reels → Drive (για YouTube Shorts / TikTok)
+// Κάθε reel της ουράς αντιγράφεται στο Drive «ΥΛΙΚΟ SOCIAL MEDIA/REELS» ως
+//   «2026-12-01 Τρι 20.00 – NDT – Τίτλος.mp4» + «… .txt» (τίτλος/περιγραφή YouTube, λεζάντα TikTok),
+// ώστε να προγραμματίζονται με το χέρι στο YouTube Studio και στο TikTok.
+const REELS_SRC_ = 'https://raw.githubusercontent.com/malamaspe/social-media-assets/main/media/';
+const DAYS_SHORT_ = ['Κυρ', 'Δευ', 'Τρι', 'Τετ', 'Πεμ', 'Παρ', 'Σαβ'];
+const DAYS_LONG_ = ['Κυριακή', 'Δευτέρα', 'Τρίτη', 'Τετάρτη', 'Πέμπτη', 'Παρασκευή', 'Σάββατο'];
+
+function reelsFolder_() {
+  const id = prop_('REELS_FOLDER_ID', '');
+  if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) {} }
+  const roots = DriveApp.getFoldersByName('ΥΛΙΚΟ SOCIAL MEDIA');
+  if (!roots.hasNext()) throw new Error('Δεν βρέθηκε ο φάκελος «ΥΛΙΚΟ SOCIAL MEDIA» στο Drive.');
+  const root = roots.next();
+  const it = root.getFoldersByName('REELS');
+  const f = it.hasNext() ? it.next() : root.createFolder('REELS');
+  P_().setProperty('REELS_FOLDER_ID', f.getId());
+  return f;
+}
+
+function athens_(d, fmt) { return Utilities.formatDate(d, 'Europe/Athens', fmt); }
+function dow_(d) { return Number(athens_(d, 'u')) % 7; }   // u: 1 = Δευτέρα … 7 = Κυριακή
+
+function reelBaseName_(it) {
+  const d = new Date(it.publish_at);
+  const t = String(it.title || '').replace(/[\\/:*?"<>|]/g, '').trim();
+  return athens_(d, 'yyyy-MM-dd') + ' ' + DAYS_SHORT_[dow_(d)] + ' ' + athens_(d, 'HH.mm') + ' – ' + it.account + (t ? ' – ' + t : '');
+}
+
+function reelTexts_(it, base) {
+  const d = new Date(it.publish_at);
+  const cap = String(it.caption || '');
+  const ytTitle = it.yt_title || ((it.title || cap.split('\n')[0]).slice(0, 90) + ' #Shorts');
+  return [
+    'ΠΟΤΕ: ' + DAYS_LONG_[dow_(d)] + ' ' + athens_(d, 'd/M/yyyy') + ', ' + athens_(d, 'HH:mm') + ' (ίδια ώρα με το Instagram)',
+    'BRAND: ' + it.account,
+    'ΒΙΝΤΕΟ: ' + base + '.mp4',
+    '',
+    '━━━━━━━━ YOUTUBE SHORTS ━━━━━━━━',
+    'Τίτλος:',
+    ytTitle,
+    '',
+    'Περιγραφή:',
+    it.yt_description || cap,
+    '',
+    '━━━━━━━━ TIKTOK ━━━━━━━━',
+    'Λεζάντα:',
+    it.tiktok_caption || cap,
+    ''
+  ].join('\n');
+}
+
+function syncReelsToDrive_(q, maxPerRun) {
+  const S = P_();
+  const reels = q.items.filter(function (it) { return it.type === 'REEL'; });
+  const key = function (it) { return it.id + '|' + it.video; };
+  let done = [];
+  try { done = JSON.parse(S.getProperty('REELS_SYNCED') || '[]'); } catch (e) {}
+  const since = Date.now() - 24 * 3600 * 1000;
+  const todo = reels.filter(function (it) {
+    return new Date(it.publish_at).getTime() > since && done.indexOf(key(it)) < 0 &&
+      String(it.video || '').indexOf(REELS_SRC_) === 0 && !S.getProperty('rsskip_' + it.id);
+  });
+  let n = 0;
+  if (todo.length) {
+    const folder = reelsFolder_();
+    todo.slice(0, maxPerRun).forEach(function (it) {
+      const base = reelBaseName_(it);
+      try {
+        const res = UrlFetchApp.fetch(it.video, { muteHttpExceptions: true });
+        if (res.getResponseCode() !== 200) throw new Error('HTTP ' + res.getResponseCode() + ' για ' + it.video);
+        [base + '.mp4', base + '.txt'].forEach(function (name) {       // παλιά έκδοση του ίδιου reel → κάδος
+          const old = folder.getFilesByName(name);
+          while (old.hasNext()) old.next().setTrashed(true);
+        });
+        folder.createFile(res.getBlob().setName(base + '.mp4'));
+        folder.createFile(base + '.txt', reelTexts_(it, base), MimeType.PLAIN_TEXT);
+        done.push(key(it));
+        S.deleteProperty('rsfail_' + it.id);
+        n++;
+        console.log('Reel στο Drive: ' + base);
+      } catch (e) {
+        const f = Number(S.getProperty('rsfail_' + it.id) || 0) + 1;
+        S.setProperty('rsfail_' + it.id, String(f));
+        console.log('Reel → Drive σφάλμα ' + f + '/' + CFG.MAX_FAILS + ' (' + it.id + '): ' + e.message);
+        if (f >= CFG.MAX_FAILS) {
+          S.setProperty('rsskip_' + it.id, new Date().toISOString());
+          notify_('Το reel ' + it.id + ' δεν μπήκε στο Drive', 'Το reel ' + it.id + ' δεν αντιγράφηκε στον φάκελο REELS μετά από ' + f + ' προσπάθειες. Το Instagram/Facebook δεν επηρεάζεται.\n\n' + e.message);
+        }
+      }
+    });
+  }
+  const live = reels.map(key);
+  S.setProperty('REELS_SYNCED', JSON.stringify(done.filter(function (k) { return live.indexOf(k) >= 0; })));
+  return n;
+}
+
+function syncReelsNow() {
+  const n = syncReelsToDrive_(fetchQueue_(), 20);
+  console.log(n ? 'Έτοιμο: ' + n + ' reels στο Drive → ΥΛΙΚΟ SOCIAL MEDIA/REELS.' : 'Όλα τα reels της ουράς είναι ήδη στο Drive.');
 }
 
 function setup() {
