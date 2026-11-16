@@ -20,6 +20,8 @@
  *   FB_ENABLED      false για να σταματήσει μόνο το Facebook
  *   GRAPH_VERSION   προαιρετικό, π.χ. v23.0 (κενό = η έκδοση του Meta app)
  *   PAUSED          true για παύση όλων των δημοσιεύσεων
+ *   TRIAL_REELS     false για να βγαίνουν τα reels κανονικά (προεπιλογή: δοκιμαστικά / trial reels)
+ *   TRIAL_STRATEGY  SS_PERFORMANCE (προεπιλογή: πάει αυτόματα και στους followers αν πάει καλά) ή MANUAL
  *   REELS_FOLDER_ID το βρίσκει/φτιάχνει μόνο του (φάκελος «REELS» μέσα στο «ΥΛΙΚΟ SOCIAL MEDIA»)
  *
  * Συναρτήσεις που τρέχεις με το χέρι:
@@ -130,17 +132,48 @@ function buildContainer_(item) {
       kids.forEach(function (k) { waitReady_(k, 0, 0, tok); });
       return createContainer_(ig, { media_type: 'CAROUSEL', children: kids.join(','), caption: cap }, tok);
     }
-    case 'REEL': {
-      const p = { media_type: 'REELS', video_url: item.video, caption: cap, share_to_feed: 'true' };
-      if (item.cover) p.cover_url = item.cover;
-      return createContainer_(ig, p, tok);
-    }
+    case 'REEL':
+      return createContainer_(ig, reelParams_(item, cap, trialOn_(item)), tok);
     default:
       throw new Error('Άγνωστος τύπος: ' + item.type);
   }
 }
 
+// Trial reels: πάνε πρώτα σε όσους ΔΕΝ ακολουθούν· με SS_PERFORMANCE περνάνε μόνα τους και στους followers αν πάνε καλά.
+// Μόνο για reels (το Instagram δεν έχει trial για posts/carousels/stories). Αν το Instagram δεν δεχτεί trial
+// (π.χ. λογαριασμός χωρίς δικαίωμα), το reel βγαίνει κανονικά και καταγράφεται στο Ιστορικό.
+function trialOn_(item) {
+  return item.type === 'REEL' && item.trial !== false && prop_('TRIAL_REELS', 'true') !== 'false';
+}
+
+function reelParams_(item, cap, trial) {
+  const p = { media_type: 'REELS', video_url: item.video, caption: cap };
+  if (item.cover) p.cover_url = item.cover;
+  if (trial) p.trial_params = JSON.stringify({ graduation_strategy: prop_('TRIAL_STRATEGY', 'SS_PERFORMANCE') });
+  else p.share_to_feed = 'true';
+  return p;
+}
+
 function publishItem_(item) {
+  if (trialOn_(item)) {
+    try {
+      return publishItemOnce_(item);
+    } catch (e) {
+      log_(item, 'Instagram: το trial δεν έγινε δεκτό, δοκιμή ως κανονικό reel', e.message);
+      const k = 'TRIAL_REJECTED_' + item.account;
+      if (!prop_(k, '')) {
+        P_().setProperty(k, new Date().toISOString());
+        notify_('Trial reel δεν έγινε δεκτό (' + item.account + ')',
+          'Το Instagram δεν δέχτηκε το ' + item.id + ' ως δοκιμαστικό reel, οπότε δημοσιεύεται ως κανονικό. ' +
+          'Συνήθως σημαίνει ότι ο λογαριασμός δεν έχει ακόμα δικαίωμα για trial reels (π.χ. λιγότεροι από 1.000 followers).\n\n' + e.message);
+      }
+      return publishItemOnce_(Object.assign({}, item, { trial: false }));
+    }
+  }
+  return publishItemOnce_(item);
+}
+
+function publishItemOnce_(item) {
   const ig = igUserId_(item.account);
   const tok = token_(item.account);
   const c = buildContainer_(item);
@@ -425,11 +458,17 @@ function dryRunReel() {
     const next = q.items.filter(function (it) { return it.type === 'REEL' && it.account === acc && new Date(it.publish_at) > now; })[0];
     if (!next) { console.log(acc + ': δεν υπάρχει επόμενο reel στην ουρά.'); return; }
     const ig = igUserId_(acc), tok = token_(acc);
-    const p = { media_type: 'REELS', video_url: next.video, caption: 'dry run', share_to_feed: 'true' };
-    if (next.cover) p.cover_url = next.cover;
-    const c = createContainer_(ig, p, tok);
+    const trial = trialOn_(next);
+    let c;
+    try {
+      c = createContainer_(ig, reelParams_(next, 'dry run', trial), tok);
+    } catch (e) {
+      if (!trial) throw e;
+      console.log(acc + ': το Instagram ΔΕΝ δέχτηκε trial reel (' + e.message + '). Θα βγαίνουν κανονικά. Δοκιμή χωρίς trial…');
+      c = createContainer_(ig, reelParams_(next, 'dry run', false), tok);
+    }
     waitReady_(c, 50, 5000, tok);
-    console.log(acc + ' Instagram OK: το reel ' + next.id + ' επεξεργάστηκε σωστά. ΔΕΝ δημοσιεύτηκε τίποτα.');
+    console.log(acc + ' Instagram OK: το reel ' + next.id + ' επεξεργάστηκε σωστά' + (trial ? ' (ως trial reel)' : '') + '. ΔΕΝ δημοσιεύτηκε τίποτα.');
   });
 }
 
