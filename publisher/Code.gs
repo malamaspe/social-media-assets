@@ -25,7 +25,7 @@
  *   findInstagramIds()  βρίσκει και αποθηκεύει μόνο του τα IDs Instagram και σελίδων Facebook
  *   checkSetup()        ελέγχει token, δικαιώματα, λογαριασμούς, ουρά και αρχεία
  *   dryRun()            δοκιμή στο επόμενο post ΧΩΡΙΣ να δημοσιεύσει τίποτα
- *   dryRunReel()        δοκιμή στο επόμενο reel (Instagram) ΧΩΡΙΣ να δημοσιεύσει τίποτα
+ *   dryRunReel()        δοκιμή στο επόμενο reel κάθε brand (Instagram) ΧΩΡΙΣ να δημοσιεύσει τίποτα
  *   setup()             βάζει τον αυτόματο έλεγχο κάθε 10 λεπτά
  *   pause() / resume()  παύση / συνέχεια
  */
@@ -417,14 +417,16 @@ function dryRun() {
 function dryRunReel() {
   const q = fetchQueue_();
   const now = new Date();
-  const next = q.items.filter(function (it) { return it.type === 'REEL' && new Date(it.publish_at) > now; })[0];
-  if (!next) { console.log('Δεν υπάρχει επόμενο reel στην ουρά.'); return; }
-  const ig = igUserId_(next.account), tok = token_(next.account);
-  const p = { media_type: 'REELS', video_url: next.video, caption: 'dry run', share_to_feed: 'true' };
-  if (next.cover) p.cover_url = next.cover;
-  const c = createContainer_(ig, p, tok);
-  waitReady_(c, 50, 5000, tok);
-  console.log(next.account + ' Instagram OK: το reel ' + next.id + ' επεξεργάστηκε σωστά. ΔΕΝ δημοσιεύτηκε τίποτα.');
+  ['NDT', 'AMAZE'].forEach(function (acc) {
+    const next = q.items.filter(function (it) { return it.type === 'REEL' && it.account === acc && new Date(it.publish_at) > now; })[0];
+    if (!next) { console.log(acc + ': δεν υπάρχει επόμενο reel στην ουρά.'); return; }
+    const ig = igUserId_(acc), tok = token_(acc);
+    const p = { media_type: 'REELS', video_url: next.video, caption: 'dry run', share_to_feed: 'true' };
+    if (next.cover) p.cover_url = next.cover;
+    const c = createContainer_(ig, p, tok);
+    waitReady_(c, 50, 5000, tok);
+    console.log(acc + ' Instagram OK: το reel ' + next.id + ' επεξεργάστηκε σωστά. ΔΕΝ δημοσιεύτηκε τίποτα.');
+  });
 }
 
 function setup() {
