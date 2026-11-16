@@ -76,10 +76,16 @@ def ndt_1208(tid):
     total = assemble('m1208n', list(zip([p[0] for p in plan], d)), tid, t0, out)
     print('NDT 8/12', round(total, 2), 's', LIB[tid]['title'], 'from', round(t0, 1), d)
 
+OUTRO_AMAZE = Path('/home/claude/ig/assets/amaze_outro_1080x1920.mp4')  # το κλιπ κλεισίματος της Amaze (A_LOGO_CLOSURE), 5.47″
+
+def outro_seg(name, src=OUTRO_AMAZE):
+    rw.run(['ffmpeg', '-y', '-v', 'error', '-i', str(src), '-vf', f'scale={rw.W}:{rw.H},setsar=1,fps={rw.FPS}', *rw.ENC, '-an', str(rw.TMP / name)])
+    return float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', str(rw.TMP / name)], capture_output=True, text=True).stdout)
+
 def amaze_1208(tid):
     rw.V = Path('/home/claude/dl/vid2'); rw.TMP = Path('/home/claude/ig/out/reel_tmp4')
-    plan = [('as1.mp4', 3.0), ('as2.mp4', 3.0), ('as3.mp4', 2.5), ('as4.mp4', 2.5), ('as5.mp4', 2.5), ('as6.mp4', 2.5), ('as7.mp4', 2.2), ('as8.mp4', 2.8)]
-    t0, beats = music_start_and_beats(tid, 25)
+    plan = [('as1.mp4', 3.0), ('as2.mp4', 3.0), ('as3.mp4', 2.5), ('as4.mp4', 2.5), ('as5.mp4', 2.5), ('as6.mp4', 2.5), ('as7.mp4', 2.2)]
+    t0, beats = music_start_and_beats(tid, 28)
     d = snap([p[1] for p in plan], beats)
     rw.video_seg('as1.mp4', 'A_IMG_1997.MOV', 0.6, d[0], 'a1.png')
     rw.video_seg('as2.mp4', 'A_IMG_1913.MOV', 2.0, d[1])
@@ -88,9 +94,9 @@ def amaze_1208(tid):
     rw.video_seg('as5.mp4', 'A_IMG_1666.MOV', 1.0, d[4])
     rw.video_seg('as6.mp4', 'A_IMG_1695.MOV', 1.0, d[5])
     rw.video_seg('as7.mp4', 'A_IMG_1663.MOV', 0.2, d[6])
-    rw.still_seg('as8.mp4', 'a_end.jpg', d[7])
+    od = outro_seg('as8o.mp4')  # κλείσιμο με το outro της Amaze αντί για κάρτα
     out = Path('/home/claude/ig/out/week4/AMAZE/2026-12-08_reel.mp4')
-    total = assemble('m1208a', list(zip([p[0] for p in plan], d)), tid, t0, out)
+    total = assemble('m1208a', list(zip([p[0] for p in plan], d)) + [('as8o.mp4', od)], tid, t0, out)
     print('Amaze 8/12', round(total, 2), 's', LIB[tid]['title'], 'from', round(t0, 1), d)
 
 if __name__ == '__main__':
