@@ -8,6 +8,12 @@
  * Αν ανεβαίνουν ακόμα αρχεία (κάτι νέο τα τελευταία 45 λεπτά), περιμένει: ξαναδοκιμάζει μόνο του κάθε 10 λεπτά
  * και σταματάει μόλις τελειώσει, με email. Τίποτα δεν σβήνεται οριστικά (ο κάδος κρατάει 30 ημέρες).
  * Μπορεί να ξανατρέξει όποτε μπει νέα εξαγωγή: ό,τι είναι ήδη τακτοποιημένο μένει ως έχει.
+ *
+ * dedupeMaterial(): ψάχνει ακριβή διπλότυπα (ίδιο περιεχόμενο, MD5 + μέγεθος) σε ΟΛΟ το «ΥΛΙΚΟ SOCIAL MEDIA»,
+ *   εκτός από τον φάκελο REELS. Κρατάει ένα αντίγραφο (πρώτα όσα ανήκουν σε σένα, μετά το παλιότερο) και τα άλλα:
+ *   δικά σου → κάδος (30 ημέρες) · του crew → βγαίνουν μόνο από τον φάκελο (μένουν στο Drive τους).
+ *   Email μόνο όταν βρει κάτι, με τη λίστα.
+ * setupDailyDedupe(): τρέχει τον έλεγχο τώρα και μετά κάθε βράδυ (~04:00), αυτόματα.
  */
 const TIDY_ = {
   ROOT: 'ΥΛΙΚΟ SOCIAL MEDIA',
@@ -142,7 +148,7 @@ function tidyJson_(res) {
 
 function tidyListUrl_(folderId, pageToken) {
   return TIDY_.API + '?pageSize=1000&q=' + encodeURIComponent("'" + folderId + "' in parents and trashed = false") +
-    '&fields=' + encodeURIComponent('nextPageToken,files(id,name,mimeType,md5Checksum,size,createdTime)') +
+    '&fields=' + encodeURIComponent('nextPageToken,files(id,name,mimeType,md5Checksum,size,createdTime,ownedByMe)') +
     (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
 }
 
@@ -161,7 +167,7 @@ function tidyWalk_(rootId) {
         res.forEach(function (r, k) {
           const t = todo[k], j = tidyJson_(r);
           (j.files || []).forEach(function (x) {
-            const c = { id: x.id, name: x.name, folder: x.mimeType === TIDY_.FOLDER, children: [],
+            const c = { id: x.id, name: x.name, folder: x.mimeType === TIDY_.FOLDER, children: [], parent: t.node.id, mine: !!x.ownedByMe,
               md5: x.md5Checksum || '', size: x.size || '', created: x.createdTime, path: t.node.path.concat([x.name]) };
             t.node.children.push(c);
             (c.folder ? next : files).push(c);
@@ -229,9 +235,9 @@ function tidyExec_(ops, deadline) {
     if (Date.now() > deadline) break;
     const chunk = ops.slice(i, i + 20);
     const res = UrlFetchApp.fetchAll(chunk.map(function (o) {
-      return o.type === 'move'
-        ? tidyReq_('patch', TIDY_.API + '/' + o.id + '?addParents=' + o.to + '&removeParents=' + o.from + '&fields=id', {})
-        : tidyReq_('patch', TIDY_.API + '/' + o.id + '?fields=id', { trashed: true });
+      if (o.type === 'move') return tidyReq_('patch', TIDY_.API + '/' + o.id + '?addParents=' + o.to + '&removeParents=' + o.from + '&fields=id', {});
+      if (o.type === 'unlink') return tidyReq_('patch', TIDY_.API + '/' + o.id + '?removeParents=' + o.from + '&fields=id', {});
+      return tidyReq_('patch', TIDY_.API + '/' + o.id + '?fields=id', { trashed: true });
     }));
     res.forEach(function (r) {
       if (r.getResponseCode() < 300) ok++;
@@ -252,4 +258,50 @@ function tidyStopTrigger_() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'tidyIgExports') ScriptApp.deleteTrigger(t);
   });
+}
+
+// ------------------------------------------------------------------ διπλότυπα σε όλο το «ΥΛΙΚΟ SOCIAL MEDIA»
+const DEDUPE_SKIP_ = ['REELS'];   // αρχεία που φτιάχνει το ίδιο το σύστημα· δεν πειράζονται
+
+function setupDailyDedupe() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dedupeMaterial') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('dedupeMaterial').timeBased().everyDays(1).atHour(4).create();
+  console.log('Έτοιμο: ο έλεγχος διπλοτύπων θα τρέχει κάθε βράδυ. Τρέχει και τώρα μία φορά…');
+  dedupeMaterial();
+}
+
+function dedupeMaterial() {
+  const it = DriveApp.getFoldersByName(TIDY_.ROOT);
+  if (!it.hasNext()) throw new Error('Δεν βρέθηκε ο φάκελος «' + TIDY_.ROOT + '».');
+  const deadline = Date.now() + TIDY_.BUDGET_MS;
+  const files = tidyWalk_(it.next().getId()).files.filter(function (f) {
+    return f.md5 && DEDUPE_SKIP_.indexOf(f.path[0]) < 0;
+  });
+  const groups = {};
+  files.forEach(function (f) { const k = f.md5 + '|' + f.size; (groups[k] = groups[k] || []).push(f); });
+  const ops = [], lines = [];
+  Object.keys(groups).forEach(function (k) {
+    const g = groups[k];
+    if (g.length < 2) return;
+    g.sort(function (a, b) {
+      if (a.mine !== b.mine) return a.mine ? -1 : 1;
+      return new Date(a.created) - new Date(b.created);
+    });
+    const keep = g[0];
+    g.slice(1).forEach(function (f) {
+      ops.push(f.mine ? { type: 'trash', id: f.id } : { type: 'unlink', id: f.id, from: f.parent });
+      lines.push('• ' + f.path.join(' / ') + '  (ίδιο με: ' + keep.path.join(' / ') + ')');
+    });
+  });
+  if (!ops.length) { console.log('Κανένα διπλότυπο σε ' + files.length + ' αρχεία.'); return 0; }
+  const x = tidyExec_(ops, deadline);
+  console.log('Διπλότυπα: ' + x.ok + '/' + ops.length + ' αφαιρέθηκαν (σε ' + files.length + ' αρχεία).');
+  notify_('Διπλότυπα στο ΥΛΙΚΟ SOCIAL MEDIA: ' + x.ok,
+    'Βρέθηκαν και αφαιρέθηκαν ' + x.ok + ' αρχεία που υπήρχαν ήδη (ίδιο ακριβώς περιεχόμενο):\n\n' +
+    lines.slice(0, 60).join('\n') + (lines.length > 60 ? '\n… και άλλα ' + (lines.length - 60) : '') +
+    '\n\nΤα δικά σου πήγαν στον κάδο του Drive (30 ημέρες). Όσα είχε ανεβάσει άλλος βγήκαν μόνο από τον φάκελο.' +
+    (x.ok < ops.length ? '\n\nΚάποια δεν αφαιρέθηκαν (' + (ops.length - x.ok) + '), θα ξαναδοκιμάσει αύριο.' : ''));
+  return x.ok;
 }
