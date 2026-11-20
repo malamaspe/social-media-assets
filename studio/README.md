@@ -24,3 +24,7 @@ mkdir -p assets && cp logos/*.png assets/
 ## Διπλότυπες φωτογραφίες
 `python3 dedupe_check.py <φάκελος με τα κατεβασμένα>` βρίσκει την ίδια φωτογραφία ανεβασμένη δύο φορές, μετονομασμένη ή ξανασυμπιεσμένη (WhatsApp, εξαγωγή Instagram), και όσες μοιάζουν με ήδη χρησιμοποιημένες (`used_assets.txt`, πεδίο `phash=`). Κάθε νέα γραμμή στο `used_assets.txt`: `<παρτίδα> <όνομα asset> phash=<hash της πηγής>`. Τα ακριβή διπλότυπα στο ίδιο το Drive τα καθαρίζει κάθε βράδυ το `dedupeMaterial` του Apps Script (publisher/Tidy.gs).
 
+## Stories με μουσική (απόφαση 20/11)
+Κάθε στατικό story γίνεται σύντομο βίντεο με μουσική από το `music_library.json`:
+`python3 story_video.py out/<φάκελος>/<BRAND>/<ημ/νία>_story_01.jpg <track_id> out/<φάκελος>/<BRAND>/<ημ/νία>_story_01.mp4 [12|15]`
+(12″, ή 15″ για stories με πολύ κείμενο / λίστες / κριτικές). Το mp4 μπαίνει δίπλα στο jpg με το ίδιο όνομα· το `make_queue.py` το βάζει στο `video` του story (το jpg μένει για δοκιμές). Προαιρετικά `captions.json` '<BRAND>|<ημ/νία>|story_music' = «Τίτλος — Καλλιτέχνης». Ταίριαξε κομμάτι με ύφος (NDT house/chill/corporate· Amaze romantic/cocktail για γάμους και κριτικές, party για πάρτι) και μην επαναλαμβάνεις το ίδιο σε κοντινές μέρες. Ο ήχος κατεβαίνει σε cache εκτός repo (`MUSIC_CACHE`, προεπιλογή /tmp/music_cache)· ποτέ mp3 στο repo.

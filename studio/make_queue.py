@@ -88,8 +88,16 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
                     items[-1]['people'] = clean_people(caps[f'{brand}|{d}|people'], f'{brand}|{d}|people', len(posts))
             for s in stories:
                 shutil.copy(s, dst)
-                items.append({'id': f'{brand}-{d}-story', 'account': brand, 'type': 'STORY',
-                              'publish_at': at(d, ts), 'images': [url(s)]})
+                it = {'id': f'{brand}-{d}-story', 'account': brand, 'type': 'STORY',
+                      'publish_at': at(d, ts), 'images': [url(s)]}
+                # Στατικό story με μουσική (απόφαση 20/11): το story_video.py φτιάχνει <ίδιο όνομα>.mp4 δίπλα στο jpg.
+                # Το Apps Script δημοσιεύει το video αν υπάρχει· το jpg μένει για δοκιμές (dryRun, checkCrewTags).
+                mp4 = s[:-4] + '.mp4'
+                if os.path.exists(mp4):
+                    shutil.copy(mp4, dst); it['video'] = url(mp4)
+                    if caps.get(f'{brand}|{d}|story_music'):
+                        it['music'] = caps[f'{brand}|{d}|story_music']
+                items.append(it)
     return items
 
 if __name__ == '__main__':
