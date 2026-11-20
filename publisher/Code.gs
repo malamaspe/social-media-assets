@@ -192,6 +192,14 @@ function withTags_(params, tags) {
   return params;
 }
 
+// Είδος σφάλματος από το μήνυμα του api_ («Graph API 400: … [code X, subcode Y]»)
+function isTransient_(msg) {
+  return /\[code -2,|subcode 2207003\]|\[code 2,|\[code 4,|Timeout|temporarily unavailable|unexpected error/i.test(String(msg));
+}
+function isTagError_(msg) {
+  return /\[code 110,|\[code 210,|subcode 2207018\]|subcode 2207066\]|subcode 2207040\]|Invalid user id|User not visible/i.test(String(msg));
+}
+
 function hasTags_(item) {
   if (item.noTags) return false;
   if (crewTags_(item).length) return true;
@@ -258,6 +266,8 @@ function publishItem_(item) {
     try {
       return publishItemTrial_(item);
     } catch (e) {
+      // Προσωρινό σφάλμα (π.χ. timeout στο κατέβασμα της εικόνας): όχι χωρίς tags, ξαναδοκιμάζει η επόμενη εκτέλεση.
+      if (isTransient_(e.message) && !isTagError_(e.message)) throw e;
       // Ξαναδοκιμή χωρίς tags· αν πετύχει, το πρόβλημα ήταν τα tags (λάθος username ή δεν δέχεται αναφορές).
       let r;
       try { r = publishItemTrial_(Object.assign({}, item, { noTags: true })); } catch (e2) { throw e; }
@@ -498,25 +508,43 @@ function checkCrewTags() {
     const mapped = crewMap_();
     Object.keys(mapped).forEach(function (k) { if (users.indexOf(mapped[k]) < 0) users.push(mapped[k]); });
     if (!users.length) { console.log(acc + ': δεν έχει οριστεί CREW_TAGS_' + acc + ' ούτε CREW_MAP (χωρίς tags).'); return; }
+    if (!prop_('IG_USER_' + acc, '')) return;
     const next = q.items.filter(function (it) {
       return it.account === acc && it.type === 'STORY' && it.images && it.images.length && new Date(it.publish_at) > now;
     })[0];
     if (!next) { console.log(acc + ': δεν υπάρχει επόμενο story με εικόνα για τη δοκιμή.'); return; }
     const ig = igUserId_(acc), tok = token_(acc);
-    const test = function (list) {
-      const c = createContainer_(ig, storyParams_(next, list), tok);
-      waitReady_(c, 0, 0, tok);
+    let me = acc;
+    try { me = '@' + api_('get', ig, { fields: 'username' }, tok).username; } catch (e) {}
+    // Μία δοκιμή ανά username· τα προσωρινά σφάλματα (timeout) ξαναδοκιμάζονται έως 3 φορές.
+    const test = function (u) {
+      let last;
+      for (let a = 0; a < 3; a++) {
+        try {
+          const c = createContainer_(ig, storyParams_(next, [u]), tok);
+          waitReady_(c, 0, 0, tok);
+          return null;
+        } catch (e) {
+          last = e;
+          if (!isTransient_(e.message) || isTagError_(e.message)) break;
+          Utilities.sleep(5000);
+        }
+      }
+      return last;
     };
-    try {
-      test(users);
-      console.log(acc + ' OK: το Instagram δέχτηκε τα tags ' + users.join(', ') + '. ΔΕΝ δημοσιεύτηκε τίποτα.');
-    } catch (e) {
-      console.log(acc + ': ΔΕΝ δέχτηκε όλα μαζί (' + e.message + '). Έλεγχος ένα-ένα…');
-      users.forEach(function (u) {
-        try { test([u]); console.log('  ' + u + ': OK'); }
-        catch (e2) { console.log('  ' + u + ': ΠΡΟΒΛΗΜΑ — ' + e2.message); }
-      });
-    }
+    console.log(acc + ' (' + me + '): έλεγχος ' + users.length + ' usernames, ΧΩΡΙΣ να δημοσιευτεί τίποτα…');
+    users.forEach(function (u) {
+      const e = test(u);
+      if (!e) { console.log('  ' + u + ': OK'); return; }
+      if (isTagError_(e.message)) {
+        console.log('  ' + u + ': ΔΕΝ γίνεται tag από ' + me + '. Λάθος username, ή ιδιωτικός λογαριασμός, ή επιτρέπει ετικέτες/αναφορές ' +
+          'μόνο από όσους ακολουθεί (να ακολουθήσει το ' + me + ' και να ανοίξει «Ετικέτες και αναφορές» σε «Όλους»). — ' + e.message);
+      } else if (isTransient_(e.message)) {
+        console.log('  ' + u + ': ΑΓΝΩΣΤΟ — το Instagram άργησε (timeout), δεν φταίει το username. Ξανατρέξε το checkCrewTags. — ' + e.message);
+      } else {
+        console.log('  ' + u + ': ΠΡΟΒΛΗΜΑ — ' + e.message);
+      }
+    });
   });
 }
 
