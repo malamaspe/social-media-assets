@@ -23,12 +23,17 @@
  *   TRIAL_REELS     false για να βγαίνουν τα reels κανονικά (προεπιλογή: δοκιμαστικά / trial reels)
  *   TRIAL_STRATEGY  SS_PERFORMANCE (προεπιλογή: πάει αυτόματα και στους followers αν πάει καλά) ή MANUAL
  *   REELS_FOLDER_ID το βρίσκει/φτιάχνει μόνο του (φάκελος «REELS» μέσα στο «ΥΛΙΚΟ SOCIAL MEDIA»)
+ *   CREW_TAGS_NDT   usernames του crew (χωρίς @, με κόμμα) που μπαίνουν ως tags σε ΚΑΘΕ story της NDT στο Instagram,
+ *   CREW_TAGS_AMAZE ώστε να τους έρχεται ειδοποίηση και να κάνουν repost. Κενό = χωρίς tags.
+ *   REEL_STORY      false για να ΜΗΝ βγαίνει κάθε reel και ως story (προεπιλογή: βγαίνει, 15′ μετά το reel)
+ *   MANUAL_REEL_STORY false για να ΜΗΝ μπαίνουν σε story τα reels που ανεβάζετε εσείς από την εφαρμογή
  *
  * Συναρτήσεις που τρέχεις με το χέρι:
  *   findInstagramIds()  βρίσκει και αποθηκεύει μόνο του τα IDs Instagram και σελίδων Facebook
  *   checkSetup()        ελέγχει token, δικαιώματα, λογαριασμούς, ουρά και αρχεία
  *   dryRun()            δοκιμή στο επόμενο post ΧΩΡΙΣ να δημοσιεύσει τίποτα
  *   dryRunReel()        δοκιμή στο επόμενο reel κάθε brand (Instagram) ΧΩΡΙΣ να δημοσιεύσει τίποτα
+ *   checkCrewTags()     ελέγχει τα usernames του CREW_TAGS_* σε story ΧΩΡΙΣ να δημοσιεύσει τίποτα
  *   syncReelsNow()      αντιγράφει τώρα τα reels της ουράς στο Drive (ΥΛΙΚΟ SOCIAL MEDIA/REELS), με .txt για
  *                       YouTube Shorts / TikTok. Γίνεται και αυτόματα σε κάθε εκτέλεση του run().
  *   setup()             βάζει τον αυτόματο έλεγχο κάθε 10 λεπτά
@@ -41,6 +46,9 @@ const CFG = {
   LATE_LIMIT_MIN: 180,   // αν κάτι καθυστερήσει πάνω από 3 ώρες, δεν δημοσιεύεται (έρχεται email)
   MAX_FAILS: 3,          // μετά από 3 αποτυχίες σταματάει να ξαναδοκιμάζει (έρχεται email)
   EVERY_MIN: 10,
+  REEL_STORY_DELAY_MIN: 15,   // το story ενός reel βγαίνει τόσα λεπτά μετά το reel
+  MANUAL_REEL_MIN_AGE: 10,    // reels που ανεβάσατε εσείς: story όταν περάσουν 10′ ...
+  MANUAL_REEL_MAX_AGE: 180,   // ... και όχι αν έχουν περάσει πάνω από 3 ώρες
 };
 
 // ------------------------------------------------------------------ helpers
@@ -94,11 +102,53 @@ function fetchQueue_() {
   const res = UrlFetchApp.fetch(CFG.QUEUE_URL + '?nocache=' + Date.now(), { muteHttpExceptions: true });
   if (res.getResponseCode() !== 200) throw new Error('Δεν διαβάστηκε το queue.json (' + res.getResponseCode() + ')');
   const q = JSON.parse(res.getContentText());
-  (q.items || []).sort(function (a, b) { return new Date(a.publish_at) - new Date(b.publish_at); });
+  q.items = withReelStories_(q.items || []);
+  q.items.sort(function (a, b) { return new Date(a.publish_at) - new Date(b.publish_at); });
   return q;
 }
 
+// Κάθε reel της ουράς βγαίνει και ως story (το ίδιο βίντεο), REEL_STORY_DELAY_MIN λεπτά μετά.
+// Όχι αν το reel έχει "story": false ή αν REEL_STORY = false. Μόνο για reels μετά την ενεργοποίηση (REEL_STORY_SINCE).
+function withReelStories_(items) {
+  if (prop_('REEL_STORY', 'true') === 'false') return items;
+  let since = prop_('REEL_STORY_SINCE', '');
+  if (!since) { since = new Date().toISOString(); P_().setProperty('REEL_STORY_SINCE', since); }
+  const have = {};
+  items.forEach(function (it) { have[it.id] = true; });
+  const extra = [];
+  items.forEach(function (it) {
+    if (it.type !== 'REEL' || it.story === false || !it.video) return;
+    if (new Date(it.publish_at) < new Date(since)) return;
+    const id = String(it.id).replace(/-post$/, '') + '-reelstory';
+    if (have[id]) return;
+    extra.push({
+      id: id, account: it.account, type: 'STORY', video: it.video, platforms: it.platforms, from_reel: it.id,
+      caption: '(story από το reel ' + it.id + ')',
+      publish_at: new Date(new Date(it.publish_at).getTime() + CFG.REEL_STORY_DELAY_MIN * 60000).toISOString(),
+    });
+  });
+  return items.concat(extra);
+}
+
 // ------------------------------------------------------------------ Instagram
+// Tags του crew σε κάθε story: Script Property CREW_TAGS_<brand> = «user1, user2» (χωρίς @).
+// Ένα item μπορεί να έχει δικά του "tags" ή "crew": false.
+function crewTags_(item) {
+  if (item.type !== 'STORY' || item.crew === false || item.noTags) return [];
+  const raw = item.tags || prop_('CREW_TAGS_' + item.account, '');
+  const seen = {};
+  return String(raw).split(/[\s,;]+/)
+    .map(function (u) { return u.replace(/^@/, '').trim(); })
+    .filter(function (u) { if (!u || seen[u.toLowerCase()]) return false; seen[u.toLowerCase()] = true; return true; })
+    .slice(0, 20);
+}
+
+function storyParams_(item, tags) {
+  const p = item.video ? { video_url: item.video, media_type: 'STORIES' } : { image_url: item.images[0], media_type: 'STORIES' };
+  if (tags && tags.length) p.user_tags = JSON.stringify(tags.map(function (u) { return { username: u }; }));
+  return p;
+}
+
 function createContainer_(igId, params, tok) {
   return api_('post', igId + '/media', params, tok).id;
 }
@@ -124,9 +174,7 @@ function buildContainer_(item) {
     case 'IMAGE':
       return createContainer_(ig, { image_url: item.images[0], caption: cap }, tok);
     case 'STORY':
-      return item.video
-        ? createContainer_(ig, { video_url: item.video, media_type: 'STORIES' }, tok)
-        : createContainer_(ig, { image_url: item.images[0], media_type: 'STORIES' }, tok);
+      return createContainer_(ig, storyParams_(item, crewTags_(item)), tok);
     case 'CAROUSEL': {
       const kids = item.images.map(function (u) { return createContainer_(ig, { image_url: u, is_carousel_item: 'true' }, tok); });
       kids.forEach(function (k) { waitReady_(k, 0, 0, tok); });
@@ -155,6 +203,25 @@ function reelParams_(item, cap, trial) {
 }
 
 function publishItem_(item) {
+  if (crewTags_(item).length) {
+    try {
+      return publishItemOnce_(item);
+    } catch (e) {
+      // Ξαναδοκιμή χωρίς tags· αν πετύχει, το πρόβλημα ήταν τα tags (λάθος username ή δεν δέχεται αναφορές).
+      let r;
+      try { r = publishItemOnce_(Object.assign({}, item, { noTags: true })); } catch (e2) { throw e; }
+      log_(item, 'Instagram: δημοσιεύτηκε ΧΩΡΙΣ tags του crew (δεν έγιναν δεκτά)', e.message);
+      const k = 'CREW_TAGS_REJECTED_' + item.account;
+      if (!prop_(k, '')) {
+        P_().setProperty(k, new Date().toISOString());
+        notify_('Tags του crew δεν έγιναν δεκτά (' + item.account + ')',
+          'Το story ' + item.id + ' δημοσιεύτηκε, αλλά χωρίς τα tags (' + crewTags_(item).join(', ') + ').\n' +
+          'Έλεγξε τα usernames στο CREW_TAGS_' + item.account + ' και ότι κάθε μέλος επιτρέπει αναφορές (mentions). ' +
+          'Τρέξε checkCrewTags για να δεις ποιο φταίει. Αφού το διορθώσεις, σβήσε το Script Property ' + k + '.\n\n' + e.message);
+      }
+      return r;
+    }
+  }
   if (trialOn_(item)) {
     try {
       return publishItemOnce_(item);
@@ -286,7 +353,7 @@ function run() {
         try {
           const r = t.fn(item);
           const link = t.link(r);
-          S.setProperty(kd, JSON.stringify({ at: new Date().toISOString(), link: link }));
+          S.setProperty(kd, JSON.stringify({ at: new Date().toISOString(), link: link, media: r.mediaId || r.id || '' }));
           S.deleteProperty(kf);
           log_(item, t.label + ': ΔΗΜΟΣΙΕΥΤΗΚΕ', link);
         } catch (e) {
@@ -300,6 +367,7 @@ function run() {
         }
       });
     });
+    try { manualReelsToStories_(q, S, now); } catch (e) { console.log('Reels εφαρμογής → story: ' + e.message); }
     syncSheet_(q);
     try { syncReelsToDrive_(q, 2); } catch (e) { console.log('Reels → Drive: ' + e.message); }
   } catch (e) {
@@ -308,6 +376,90 @@ function run() {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ------------------------------------------------------------------ reels από την εφαρμογή → story
+// Reels που ανεβάζετε εσείς από την εφαρμογή (όχι από την ουρά) μπαίνουν και σε story (Instagram + Facebook),
+// 10′–3 ώρες μετά. Μία προσπάθεια ανά reel. Δεν γίνεται αν το reel έχει μουσική από τη βιβλιοθήκη του Instagram
+// (το API δεν δίνει το βίντεο) ή αν είναι πάνω από 60″ (όριο story)· τότε έρχεται email μία φορά.
+function manualReelsToStories_(q, S, now) {
+  if (prop_('MANUAL_REEL_STORY', 'true') === 'false' || prop_('REEL_STORY', 'true') === 'false') return;
+  let since = prop_('MANUAL_REEL_STORY_SINCE', '');
+  if (!since) { since = now.toISOString(); S.setProperty('MANUAL_REEL_STORY_SINCE', since); }
+  const ours = {};
+  q.items.forEach(function (it) {
+    if (it.type !== 'REEL') return;
+    const d = S.getProperty('done_' + it.id);
+    if (!d) return;
+    try { const o = JSON.parse(d); if (o.link) ours[o.link] = true; if (o.media) ours[o.media] = true; } catch (e) {}
+  });
+  ['NDT', 'AMAZE'].forEach(function (acc) {
+    if (!prop_('IG_USER_' + acc, '')) return;
+    let list = [];
+    try {
+      list = api_('get', igUserId_(acc) + '/media',
+        { fields: 'id,media_product_type,media_url,permalink,timestamp', limit: 10 }, token_(acc)).data || [];
+    } catch (e) { console.log('Reels εφαρμογής ' + acc + ': ' + e.message); return; }
+    list.forEach(function (m) {
+      if (m.media_product_type !== 'REELS' || ours[m.id] || ours[m.permalink]) return;
+      const t = new Date(m.timestamp), age = (now - t) / 60000;
+      if (t < new Date(since) || age < CFG.MANUAL_REEL_MIN_AGE || age > CFG.MANUAL_REEL_MAX_AGE) return;
+      const item = { id: acc + '-appreel-' + m.id, account: acc, type: 'STORY', video: m.media_url,
+        publish_at: t.toISOString(), caption: '(story από reel της εφαρμογής ' + (m.permalink || m.id) + ')' };
+      if (S.getProperty('done_' + item.id) || S.getProperty('skip_' + item.id)) return;
+      if (!m.media_url) {
+        S.setProperty('skip_' + item.id, now.toISOString());
+        log_(item, 'Instagram: ΔΕΝ μπήκε σε story', 'Το API δεν δίνει το βίντεο (συνήθως μουσική από τη βιβλιοθήκη του Instagram)');
+        notify_('Reel χωρίς αυτόματο story (' + acc + ')', 'Το reel ' + (m.permalink || m.id) + ' δεν μπήκε αυτόματα σε story: ' +
+          'το Instagram δεν δίνει το βίντεο μέσω API (συνήθως όταν έχει μουσική από τη βιβλιοθήκη του Instagram).\n' +
+          'Βάλ\' το με το χέρι: στο reel πάτα ✈️ → «Προσθήκη στην ιστορία».');
+        return;
+      }
+      targets_(item).forEach(function (tg) {
+        const kd = tg.pre + 'done_' + item.id, ks = tg.pre + 'skip_' + item.id;
+        if (S.getProperty(kd) || S.getProperty(ks)) return;
+        try {
+          const r = tg.fn(item);
+          S.setProperty(kd, JSON.stringify({ at: new Date().toISOString(), link: tg.link(r), media: r.mediaId || r.id || '' }));
+          log_(item, tg.label + ': ΔΗΜΟΣΙΕΥΤΗΚΕ (story από reel της εφαρμογής)', tg.link(r));
+        } catch (e) {
+          S.setProperty(ks, now.toISOString());
+          log_(item, tg.label + ': ΔΕΝ μπήκε σε story', e.message);
+          if (!tg.pre) notify_('Reel χωρίς αυτόματο story (' + acc + ')', 'Το reel ' + (m.permalink || m.id) +
+            ' δεν μπήκε αυτόματα σε story (πιθανότατα είναι πάνω από 60″, το όριο των stories).\n' +
+            'Βάλ\' το με το χέρι: στο reel πάτα ✈️ → «Προσθήκη στην ιστορία».\n\n' + e.message);
+        }
+      });
+    });
+  });
+}
+
+function checkCrewTags() {
+  const q = fetchQueue_();
+  const now = new Date();
+  ['NDT', 'AMAZE'].forEach(function (acc) {
+    const users = crewTags_({ type: 'STORY', account: acc });
+    if (!users.length) { console.log(acc + ': δεν έχει οριστεί CREW_TAGS_' + acc + ' (stories χωρίς tags).'); return; }
+    const next = q.items.filter(function (it) {
+      return it.account === acc && it.type === 'STORY' && it.images && it.images.length && new Date(it.publish_at) > now;
+    })[0];
+    if (!next) { console.log(acc + ': δεν υπάρχει επόμενο story με εικόνα για τη δοκιμή.'); return; }
+    const ig = igUserId_(acc), tok = token_(acc);
+    const test = function (list) {
+      const c = createContainer_(ig, storyParams_(next, list), tok);
+      waitReady_(c, 0, 0, tok);
+    };
+    try {
+      test(users);
+      console.log(acc + ' OK: το Instagram δέχτηκε τα tags ' + users.join(', ') + '. ΔΕΝ δημοσιεύτηκε τίποτα.');
+    } catch (e) {
+      console.log(acc + ': ΔΕΝ δέχτηκε όλα μαζί (' + e.message + '). Έλεγχος ένα-ένα…');
+      users.forEach(function (u) {
+        try { test([u]); console.log('  ' + u + ': OK'); }
+        catch (e2) { console.log('  ' + u + ': ΠΡΟΒΛΗΜΑ — ' + e2.message); }
+      });
+    }
+  });
 }
 
 // ------------------------------------------------------------------ sheet view
