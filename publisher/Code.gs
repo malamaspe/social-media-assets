@@ -505,9 +505,12 @@ function checkCrewTags() {
   const now = new Date();
   ['NDT', 'AMAZE'].forEach(function (acc) {
     const users = crewTags_({ type: 'STORY', account: acc });
+    const inStories = {};
+    users.forEach(function (u) { inStories[u] = true; });
     const mapped = crewMap_();
     Object.keys(mapped).forEach(function (k) { if (users.indexOf(mapped[k]) < 0) users.push(mapped[k]); });
     if (!users.length) { console.log(acc + ': δεν έχει οριστεί CREW_TAGS_' + acc + ' ούτε CREW_MAP (χωρίς tags).'); return; }
+    const why = function (u) { return inStories[u] ? ' [stories ' + acc + ']' : ' [μόνο σε posts όπου φαίνεται, από το CREW_MAP]'; };
     if (!prop_('IG_USER_' + acc, '')) return;
     const next = q.items.filter(function (it) {
       return it.account === acc && it.type === 'STORY' && it.images && it.images.length && new Date(it.publish_at) > now;
@@ -535,14 +538,14 @@ function checkCrewTags() {
     console.log(acc + ' (' + me + '): έλεγχος ' + users.length + ' usernames, ΧΩΡΙΣ να δημοσιευτεί τίποτα…');
     users.forEach(function (u) {
       const e = test(u);
-      if (!e) { console.log('  ' + u + ': OK'); return; }
+      if (!e) { console.log('  ' + u + why(u) + ': OK'); return; }
       if (isTagError_(e.message)) {
-        console.log('  ' + u + ': ΔΕΝ γίνεται tag από ' + me + '. Λάθος username, ή ιδιωτικός λογαριασμός, ή επιτρέπει ετικέτες/αναφορές ' +
-          'μόνο από όσους ακολουθεί (να ακολουθήσει το ' + me + ' και να ανοίξει «Ετικέτες και αναφορές» σε «Όλους»). — ' + e.message);
+        console.log('  ' + u + why(u) + ': ΔΕΝ γίνεται tag από ' + me + '. Το API κάνει tag μόνο σε ΔΗΜΟΣΙΟΥΣ λογαριασμούς: πιθανότατα ιδιωτικός λογαριασμός (ή λάθος username, ή επιτρέπει ετικέτες/αναφορές ' +
+          'μόνο από όσους ακολουθεί (να ακολουθήσει το ' + me + ' και να ανοίξει «Ετικέτες και αναφορές» σε «Όλους»). Βγάλε τον από το CREW_TAGS_' + acc + ', αλλιώς τα stories βγαίνουν χωρίς κανένα tag. — ' + e.message);
       } else if (isTransient_(e.message)) {
-        console.log('  ' + u + ': ΑΓΝΩΣΤΟ — το Instagram άργησε (timeout), δεν φταίει το username. Ξανατρέξε το checkCrewTags. — ' + e.message);
+        console.log('  ' + u + why(u) + ': ΑΓΝΩΣΤΟ — το Instagram άργησε (timeout), δεν φταίει το username. Ξανατρέξε το checkCrewTags. — ' + e.message);
       } else {
-        console.log('  ' + u + ': ΠΡΟΒΛΗΜΑ — ' + e.message);
+        console.log('  ' + u + why(u) + ': ΠΡΟΒΛΗΜΑ — ' + e.message);
       }
     });
   });
