@@ -7,7 +7,24 @@ REPO_RAW = 'https://raw.githubusercontent.com/malamaspe/social-media-assets/main
 TIMES = {'NDT': ('20:00', '20:05'), 'AMAZE': ('21:00', '21:05')}
 # Προαιρετικά κείμενα για YouTube Shorts / TikTok ανά reel, στο captions.json με κλειδί '<BRAND>|<YYYY-MM-DD>|reel'.
 # Το Apps Script τα γράφει σε .txt δίπλα στο mp4, στον φάκελο Drive «ΥΛΙΚΟ SOCIAL MEDIA/REELS».
-REEL_META = ('title', 'yt_title', 'yt_description', 'tiktok_caption')
+REEL_META = ('title', 'yt_title', 'yt_description', 'tiktok_caption', 'yt_tags')
+# yt_tags: ετικέτες για το πεδίο «Ετικέτες» (Tags) του YouTube Studio, ΟΧΙ για την περιγραφή
+# (πολλές λέξεις-κλειδιά στην περιγραφή = spam κατά τους κανόνες του YouTube).
+# Όριο YouTube: 500 χαρακτήρες συνολικά· μετράνε τα κόμματα και +2 για κάθε ετικέτα με κενό.
+YT_TAGS_MAX = 500
+
+def yt_tags_len(tags):
+    return sum(len(t) + (2 if ' ' in t else 0) for t in tags) + max(len(tags) - 1, 0)
+
+def clean_tags(v, where):
+    tags = [t.strip() for t in (v if isinstance(v, list) else str(v).split(',')) if t.strip()]
+    seen, out = set(), []
+    for t in tags:
+        if t.lower() not in seen:
+            seen.add(t.lower()); out.append(t)
+    n = yt_tags_len(out)
+    assert n <= YT_TAGS_MAX, f'{where}: yt_tags {n} χαρακτήρες (όριο YouTube {YT_TAGS_MAX})'
+    return ', '.join(out)
 
 def at(d, hm):
     """Ώρα Αθήνας με τη σωστή μετατόπιση (χειμερινή/θερινή ώρα)."""
@@ -37,6 +54,8 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
                       'video': url(reel), 'caption': caps[f'{brand}|{d}']}
                 meta = caps.get(f'{brand}|{d}|reel') or {}
                 it.update({k: meta[k] for k in REEL_META if meta.get(k)})
+                if it.get('yt_tags'):
+                    it['yt_tags'] = clean_tags(it['yt_tags'], f'{brand}|{d}|reel')
                 cover = f'{week_dir}/{brand}/{d}_reel_cover.jpg'
                 if os.path.exists(cover):
                     shutil.copy(cover, dst); it['cover'] = url(cover)
