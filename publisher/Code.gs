@@ -25,6 +25,8 @@
  *   REELS_FOLDER_ID το βρίσκει/φτιάχνει μόνο του (φάκελος «REELS» μέσα στο «ΥΛΙΚΟ SOCIAL MEDIA»)
  *   CREW_TAGS_NDT   usernames του crew (χωρίς @, με κόμμα) που μπαίνουν ως tags σε ΚΑΘΕ story της NDT στο Instagram,
  *   CREW_TAGS_AMAZE ώστε να τους έρχεται ειδοποίηση και να κάνουν repost. Κενό = χωρίς tags.
+ *   CREW_MAP        όνομα=username για tags ΜΟΝΟ σε όσους φαίνονται σε post, π.χ. «Κώστας=kostas.ndt, Ιγνάτης=ignatis»
+ *                   (η ουρά γράφει μόνο το μικρό όνομα στο "people" του post· τα usernames μένουν εδώ)
  *   REEL_STORY      false για να ΜΗΝ βγαίνει κάθε reel και ως story (προεπιλογή: βγαίνει, 15′ μετά το reel)
  *   MANUAL_REEL_STORY false για να ΜΗΝ μπαίνουν σε story τα reels που ανεβάζετε εσείς από την εφαρμογή
  *
@@ -33,7 +35,7 @@
  *   checkSetup()        ελέγχει token, δικαιώματα, λογαριασμούς, ουρά και αρχεία
  *   dryRun()            δοκιμή στο επόμενο post ΧΩΡΙΣ να δημοσιεύσει τίποτα
  *   dryRunReel()        δοκιμή στο επόμενο reel κάθε brand (Instagram) ΧΩΡΙΣ να δημοσιεύσει τίποτα
- *   checkCrewTags()     ελέγχει τα usernames του CREW_TAGS_* σε story ΧΩΡΙΣ να δημοσιεύσει τίποτα
+ *   checkCrewTags()     ελέγχει τα usernames του CREW_TAGS_* και του CREW_MAP ΧΩΡΙΣ να δημοσιεύσει τίποτα
  *   syncReelsNow()      αντιγράφει τώρα τα reels της ουράς στο Drive (ΥΛΙΚΟ SOCIAL MEDIA/REELS), με .txt για
  *                       YouTube Shorts / TikTok. Γίνεται και αυτόματα σε κάθε εκτέλεση του run().
  *   setup()             βάζει τον αυτόματο έλεγχο κάθε 10 λεπτά
@@ -149,6 +151,53 @@ function storyParams_(item, tags) {
   return p;
 }
 
+// Tags σε posts ΜΟΝΟ σε όσους φαίνονται: στο item της ουράς
+//   "people": [{ "name": "Κώστας", "slide": 0, "x": 0.6, "y": 0.3 }]
+// slide = θέση στο carousel (0 = πρώτη), x/y = σημείο πάνω στο άτομο (0–1, από αριστερά/πάνω).
+// Στις φωτογραφίες τα ονόματα ΔΕΝ φαίνονται πάνω στην εικόνα (μόνο ένα μικρό εικονίδιο, εμφανίζονται με πάτημα).
+// Στα reels δεν υπάρχουν x/y. Τα ονόματα γίνονται usernames από το CREW_MAP.
+function norm_(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim(); }
+
+function crewMap_() {
+  const m = {};
+  String(prop_('CREW_MAP', '')).split(/[,;\n]+/).forEach(function (pair) {
+    const i = pair.indexOf('=');
+    if (i < 0) return;
+    const k = norm_(pair.slice(0, i)), v = pair.slice(i + 1).replace(/^\s*@/, '').trim();
+    if (k && v) m[k] = v;
+  });
+  return m;
+}
+
+function peopleTags_(item, slide) {
+  if (item.noTags || !item.people || !item.people.length || item.type === 'STORY') return [];
+  const map = crewMap_();
+  const cl = function (v, d) { v = Number(v); return isFinite(v) ? Math.min(1, Math.max(0, v)) : d; };
+  const out = [], seen = {};
+  item.people.forEach(function (p) {
+    if (Number(p.slide || 0) !== slide) return;
+    const u = map[norm_(p.name)];
+    if (!u) { console.log('CREW_MAP: δεν υπάρχει username για «' + p.name + '» (' + item.id + ')'); return; }
+    if (seen[u]) return;
+    seen[u] = true;
+    const t = { username: u };
+    if (item.type !== 'REEL') { t.x = cl(p.x, 0.5); t.y = cl(p.y, 0.5); }
+    out.push(t);
+  });
+  return out.slice(0, 20);
+}
+
+function withTags_(params, tags) {
+  if (tags && tags.length) params.user_tags = JSON.stringify(tags);
+  return params;
+}
+
+function hasTags_(item) {
+  if (item.noTags) return false;
+  if (crewTags_(item).length) return true;
+  return !!(item.people && item.people.length && item.type !== 'STORY');
+}
+
 function createContainer_(igId, params, tok) {
   return api_('post', igId + '/media', params, tok).id;
 }
@@ -172,16 +221,18 @@ function buildContainer_(item) {
   const cap = item.caption || '';
   switch (item.type) {
     case 'IMAGE':
-      return createContainer_(ig, { image_url: item.images[0], caption: cap }, tok);
+      return createContainer_(ig, withTags_({ image_url: item.images[0], caption: cap }, peopleTags_(item, 0)), tok);
     case 'STORY':
       return createContainer_(ig, storyParams_(item, crewTags_(item)), tok);
     case 'CAROUSEL': {
-      const kids = item.images.map(function (u) { return createContainer_(ig, { image_url: u, is_carousel_item: 'true' }, tok); });
+      const kids = item.images.map(function (u, i) {
+        return createContainer_(ig, withTags_({ image_url: u, is_carousel_item: 'true' }, peopleTags_(item, i)), tok);
+      });
       kids.forEach(function (k) { waitReady_(k, 0, 0, tok); });
       return createContainer_(ig, { media_type: 'CAROUSEL', children: kids.join(','), caption: cap }, tok);
     }
     case 'REEL':
-      return createContainer_(ig, reelParams_(item, cap, trialOn_(item)), tok);
+      return createContainer_(ig, withTags_(reelParams_(item, cap, trialOn_(item)), peopleTags_(item, 0)), tok);
     default:
       throw new Error('Άγνωστος τύπος: ' + item.type);
   }
@@ -203,41 +254,46 @@ function reelParams_(item, cap, trial) {
 }
 
 function publishItem_(item) {
-  if (crewTags_(item).length) {
+  if (hasTags_(item)) {
     try {
-      return publishItemOnce_(item);
+      return publishItemTrial_(item);
     } catch (e) {
       // Ξαναδοκιμή χωρίς tags· αν πετύχει, το πρόβλημα ήταν τα tags (λάθος username ή δεν δέχεται αναφορές).
       let r;
-      try { r = publishItemOnce_(Object.assign({}, item, { noTags: true })); } catch (e2) { throw e; }
-      log_(item, 'Instagram: δημοσιεύτηκε ΧΩΡΙΣ tags του crew (δεν έγιναν δεκτά)', e.message);
+      try { r = publishItemTrial_(Object.assign({}, item, { noTags: true })); } catch (e2) { throw e; }
+      log_(item, 'Instagram: δημοσιεύτηκε ΧΩΡΙΣ tags (δεν έγιναν δεκτά)', e.message);
       const k = 'CREW_TAGS_REJECTED_' + item.account;
       if (!prop_(k, '')) {
         P_().setProperty(k, new Date().toISOString());
         notify_('Tags του crew δεν έγιναν δεκτά (' + item.account + ')',
-          'Το story ' + item.id + ' δημοσιεύτηκε, αλλά χωρίς τα tags (' + crewTags_(item).join(', ') + ').\n' +
-          'Έλεγξε τα usernames στο CREW_TAGS_' + item.account + ' και ότι κάθε μέλος επιτρέπει αναφορές (mentions). ' +
+          'Το ' + item.id + ' δημοσιεύτηκε, αλλά χωρίς tags.\n' +
+          'Έλεγξε τα usernames στο CREW_TAGS_' + item.account + ' / CREW_MAP και ότι κάθε μέλος επιτρέπει αναφορές και ετικέτες. ' +
           'Τρέξε checkCrewTags για να δεις ποιο φταίει. Αφού το διορθώσεις, σβήσε το Script Property ' + k + '.\n\n' + e.message);
       }
       return r;
     }
   }
-  if (trialOn_(item)) {
-    try {
-      return publishItemOnce_(item);
-    } catch (e) {
-      log_(item, 'Instagram: το trial δεν έγινε δεκτό, δοκιμή ως κανονικό reel', e.message);
-      const k = 'TRIAL_REJECTED_' + item.account;
-      if (!prop_(k, '')) {
-        P_().setProperty(k, new Date().toISOString());
-        notify_('Trial reel δεν έγινε δεκτό (' + item.account + ')',
-          'Το Instagram δεν δέχτηκε το ' + item.id + ' ως δοκιμαστικό reel, οπότε δημοσιεύεται ως κανονικό. ' +
-          'Συνήθως σημαίνει ότι ο λογαριασμός δεν έχει ακόμα δικαίωμα για trial reels (π.χ. λιγότεροι από 1.000 followers).\n\n' + e.message);
-      }
-      return publishItemOnce_(Object.assign({}, item, { trial: false }));
+  return publishItemTrial_(item);
+}
+
+function publishItemTrial_(item) {
+  if (!trialOn_(item)) return publishItemOnce_(item);
+  try {
+    return publishItemOnce_(item);
+  } catch (e) {
+    // Ξαναδοκιμή ως κανονικό reel· μόνο αν πετύχει, το πρόβλημα ήταν το trial.
+    let r;
+    try { r = publishItemOnce_(Object.assign({}, item, { trial: false })); } catch (e2) { throw e; }
+    log_(item, 'Instagram: το trial δεν έγινε δεκτό, δημοσιεύτηκε ως κανονικό reel', e.message);
+    const k = 'TRIAL_REJECTED_' + item.account;
+    if (!prop_(k, '')) {
+      P_().setProperty(k, new Date().toISOString());
+      notify_('Trial reel δεν έγινε δεκτό (' + item.account + ')',
+        'Το Instagram δεν δέχτηκε το ' + item.id + ' ως δοκιμαστικό reel, οπότε δημοσιεύτηκε ως κανονικό. ' +
+        'Συνήθως σημαίνει ότι ο λογαριασμός δεν έχει ακόμα δικαίωμα για trial reels (π.χ. λιγότεροι από 1.000 followers).\n\n' + e.message);
     }
+    return r;
   }
-  return publishItemOnce_(item);
 }
 
 function publishItemOnce_(item) {
@@ -439,7 +495,9 @@ function checkCrewTags() {
   const now = new Date();
   ['NDT', 'AMAZE'].forEach(function (acc) {
     const users = crewTags_({ type: 'STORY', account: acc });
-    if (!users.length) { console.log(acc + ': δεν έχει οριστεί CREW_TAGS_' + acc + ' (stories χωρίς tags).'); return; }
+    const mapped = crewMap_();
+    Object.keys(mapped).forEach(function (k) { if (users.indexOf(mapped[k]) < 0) users.push(mapped[k]); });
+    if (!users.length) { console.log(acc + ': δεν έχει οριστεί CREW_TAGS_' + acc + ' ούτε CREW_MAP (χωρίς tags).'); return; }
     const next = q.items.filter(function (it) {
       return it.account === acc && it.type === 'STORY' && it.images && it.images.length && new Date(it.publish_at) > now;
     })[0];

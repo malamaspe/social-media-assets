@@ -30,6 +30,23 @@ def at(d, hm):
     """Ώρα Αθήνας με τη σωστή μετατόπιση (χειμερινή/θερινή ώρα)."""
     return datetime.fromisoformat(f'{d}T{hm}:00').replace(tzinfo=ATH).isoformat()
 
+def clean_people(v, where, n_slides):
+    """Tags σε posts μόνο σε όσους φαίνονται: captions.json '<BRAND>|<YYYY-MM-DD>|people' =
+    [{"name": "Κώστας", "slide": 0, "x": 0.6, "y": 0.3}, ...]. Μόνο μικρά ονόματα (τα usernames είναι
+    στο CREW_MAP του Apps Script, όχι στο δημόσιο repo). slide: 0 = πρώτη εικόνα· x/y 0–1 πάνω στο άτομο."""
+    assert isinstance(v, list), f'{where}: people πρέπει να είναι λίστα'
+    out = []
+    for p in v:
+        assert isinstance(p, dict) and str(p.get('name', '')).strip(), f'{where}: λείπει name σε {p}'
+        assert '@' not in p['name'] and '.' not in p['name'] and '_' not in p['name'], f'{where}: μόνο μικρό όνομα, όχι username ({p["name"]})'
+        s = int(p.get('slide', 0)); assert 0 <= s < n_slides, f'{where}: slide {s} εκτός ορίων (0–{n_slides - 1})'
+        q = {'name': p['name'].strip(), 'slide': s}
+        for k in ('x', 'y'):
+            if k in p:
+                val = float(p[k]); assert 0 <= val <= 1, f'{where}: {k}={val} εκτός 0–1'; q[k] = round(val, 3)
+        out.append(q)
+    return out
+
 def build(week_dir, repo_dir, month_folder, skip_reels=False):
     """month_folder: e.g. 2026-11, or 'auto' to use each day's own month."""
     caps = json.load(open(f'{week_dir}/captions.json'))
@@ -56,6 +73,8 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
                 it.update({k: meta[k] for k in REEL_META if meta.get(k)})
                 if it.get('yt_tags'):
                     it['yt_tags'] = clean_tags(it['yt_tags'], f'{brand}|{d}|reel')
+                if caps.get(f'{brand}|{d}|people'):
+                    it['people'] = clean_people(caps[f'{brand}|{d}|people'], f'{brand}|{d}|people', 1)
                 cover = f'{week_dir}/{brand}/{d}_reel_cover.jpg'
                 if os.path.exists(cover):
                     shutil.copy(cover, dst); it['cover'] = url(cover)
@@ -65,6 +84,8 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
                     shutil.copy(p, dst)
                 items.append({'id': f'{brand}-{d}-post', 'account': brand, 'type': 'CAROUSEL' if len(posts) > 1 else 'IMAGE',
                               'publish_at': at(d, tp), 'images': [url(p) for p in posts], 'caption': caps[f'{brand}|{d}']})
+                if caps.get(f'{brand}|{d}|people'):
+                    items[-1]['people'] = clean_people(caps[f'{brand}|{d}|people'], f'{brand}|{d}|people', len(posts))
             for s in stories:
                 shutil.copy(s, dst)
                 items.append({'id': f'{brand}-{d}-story', 'account': brand, 'type': 'STORY',
