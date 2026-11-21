@@ -14,6 +14,8 @@ Facebook, ούτε story, ούτε Drive). Το Apps Script τα δημοσιε�
 
 Κανόνες κειμένου LinkedIn: ≤ 3000 χαρακτήρες (καλύτερα < 1300), οι 2 πρώτες γραμμές είναι το «άγκιστρο»
 (μετά κόβεται σε «…περισσότερα»), 3–5 hashtags στο τέλος, χωρίς @mentions και χωρίς links στο κείμενο.
+CTA πάντα με email, ΟΧΙ μηνύματα στο LinkedIn (ο Πέτρος δεν παρακολουθεί τα εισερχόμενα του LinkedIn, 21/11).
+Η υπογραφή (email + σελίδα NDT στο LinkedIn) μπαίνει ΑΥΤΟΜΑΤΑ πριν τα hashtags· "footer": false για εξαίρεση.
 """
 import json, re, sys
 from datetime import datetime
@@ -22,6 +24,17 @@ from zoneinfo import ZoneInfo
 ATH = ZoneInfo('Europe/Athens')
 MAX_CHARS = 3000
 MAX_TAGS = 5
+CONTACT_EMAIL = 'info@newdjsteam.gr'
+PAGE_URL = 'https://www.linkedin.com/company/newdjsteam'
+FOOTER = f'📩 Για προσφορά ή ερωτήσεις: {CONTACT_EMAIL}\n🔗 Η σελίδα της NDT στο LinkedIn: {PAGE_URL}'
+
+
+def with_footer(text):
+    """Υπογραφή πριν την τελευταία παράγραφο αν είναι hashtags, αλλιώς στο τέλος."""
+    parts = text.rstrip().split('\n\n')
+    if len(parts) > 1 and parts[-1].lstrip().startswith('#'):
+        return '\n\n'.join(parts[:-1] + [FOOTER, parts[-1]])
+    return text.rstrip() + '\n\n' + FOOTER
 
 
 def at(d, hm):
@@ -37,8 +50,12 @@ def build(posts, queue_items):
         assert len(text) <= MAX_CHARS, f'{where}: {len(text)} χαρακτήρες (όριο {MAX_CHARS})'
         tags = re.findall(r'#\w+', text)
         assert len(tags) <= MAX_TAGS, f'{where}: {len(tags)} hashtags (το πολύ {MAX_TAGS})'
-        assert '@' not in text, f'{where}: χωρίς @ (τα mentions δεν γίνονται από εδώ)'
-        assert 'http' not in text, f'{where}: χωρίς links στο κείμενο'
+        assert '@' not in text, f'{where}: χωρίς @ (τα mentions δεν γίνονται από εδώ· το email μπαίνει με την υπογραφή)'
+        assert 'http' not in text, f'{where}: χωρίς links στο κείμενο (η σελίδα της NDT μπαίνει με την υπογραφή)'
+        assert 'μήνυμα' not in text, f'{where}: CTA με email, όχι «μήνυμα» στο LinkedIn'
+        if p.get('footer', True):
+            text = with_footer(text)
+        assert len(text) <= MAX_CHARS, f'{where}: {len(text)} χαρακτήρες με την υπογραφή (όριο {MAX_CHARS})'
         it = {'account': p.get('account', 'NDT'), 'platforms': ['linkedin'],
               'publish_at': at(p['date'], p.get('time', '08:45')), 'caption': text}
         if p.get('from'):
