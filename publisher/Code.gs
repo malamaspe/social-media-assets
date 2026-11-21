@@ -29,6 +29,12 @@
  *                   (η ουρά γράφει μόνο το μικρό όνομα στο "people" του post· τα usernames μένουν εδώ)
  *   REEL_STORY      false για να ΜΗΝ βγαίνει κάθε reel και ως story (προεπιλογή: βγαίνει, 15′ μετά το reel)
  *   MANUAL_REEL_STORY false για να ΜΗΝ μπαίνουν σε story τα reels που ανεβάζετε εσείς από την εφαρμογή
+ *   LI_TOKEN        access token του LinkedIn (προσωπικό προφίλ· scopes openid, profile, w_member_social).
+ *                   Λήγει στις 60 ημέρες: έρχεται email στις 50, 57 και 59 ημέρες. Αλλάζεις μόνο αυτό· τα υπόλοιπα
+ *                   LI_* (LI_AUTHOR, LI_NAME, LI_SINCE, LI_TOKEN_AT) τα γράφει μόνο του το script.
+ *   LI_ENABLED      false για να σταματήσει μόνο το LinkedIn
+ *   LI_VERSION      προαιρετικό, έκδοση LinkedIn API (YYYYMM, προεπιλογή στο CFG)
+ *                   Στο LinkedIn πάνε ΜΟΝΟ τα items της ουράς με "platforms": ["linkedin"] (δικά τους κείμενα).
  *
  * Συναρτήσεις που τρέχεις με το χέρι:
  *   findInstagramIds()  βρίσκει και αποθηκεύει μόνο του τα IDs Instagram και σελίδων Facebook
@@ -38,6 +44,7 @@
  *   checkCrewTags()     ελέγχει τα usernames του CREW_TAGS_* και του CREW_MAP ΧΩΡΙΣ να δημοσιεύσει τίποτα
  *   syncReelsNow()      αντιγράφει τώρα τα reels της ουράς στο Drive (ΥΛΙΚΟ SOCIAL MEDIA/REELS), με .txt για
  *                       YouTube Shorts / TikTok. Γίνεται και αυτόματα σε κάθε εκτέλεση του run().
+ *   linkedinSetup()     μετά το LI_TOKEN: βρίσκει το προφίλ σου και δείχνει τα επόμενα posts LinkedIn (δεν δημοσιεύει)
  *   setup()             βάζει τον αυτόματο έλεγχο κάθε 10 λεπτά
  *   pause() / resume()  παύση / συνέχεια
  */
@@ -51,6 +58,10 @@ const CFG = {
   REEL_STORY_DELAY_MIN: 15,   // το story ενός reel βγαίνει τόσα λεπτά μετά το reel
   MANUAL_REEL_MIN_AGE: 10,    // reels που ανεβάσατε εσείς: story όταν περάσουν 10′ ...
   MANUAL_REEL_MAX_AGE: 180,   // ... και όχι αν έχουν περάσει πάνω από 3 ώρες
+  LI_API: 'https://api.linkedin.com',
+  LI_VERSION: '202611',       // οι εκδόσεις του LinkedIn ισχύουν περίπου 1 χρόνο· αλλάζει με LI_VERSION
+  LI_TOKEN_DAYS: 60,
+  LI_MAX_CHARS: 3000,
 };
 
 // ------------------------------------------------------------------ helpers
@@ -119,7 +130,7 @@ function withReelStories_(items) {
   items.forEach(function (it) { have[it.id] = true; });
   const extra = [];
   items.forEach(function (it) {
-    if (it.type !== 'REEL' || it.story === false || !it.video) return;
+    if (it.type !== 'REEL' || it.story === false || !it.video || !igEnabled_(it)) return;
     if (new Date(it.publish_at) < new Date(since)) return;
     const id = String(it.id).replace(/-post$/, '') + '-reelstory';
     if (have[id]) return;
@@ -386,12 +397,207 @@ function publishFb_(item) {
   }
 }
 
+// ------------------------------------------------------------------ LinkedIn (προσωπικό προφίλ)
+// Μόνο items με "platforms": ["linkedin"]: δικό τους κείμενο και ώρα, ίδιες εικόνες/βίντεο με το Instagram.
+// Τύποι: IMAGE (1 εικόνα), CAROUSEL (2–20 εικόνες), REEL (βίντεο mp4), TEXT (μόνο κείμενο).
+function igEnabled_(item) { return !item.platforms || item.platforms.indexOf('instagram') >= 0; }
+
+function liWanted_(item) { return !!item.platforms && item.platforms.indexOf('linkedin') >= 0; }
+
+function liReady_() { return prop_('LI_ENABLED', 'true') !== 'false' && !!prop_('LI_TOKEN', '') && !!prop_('LI_AUTHOR', ''); }
+
+// Posts με ώρα πριν συνδεθεί το LinkedIn (LI_SINCE) αγνοούνται σιωπηλά, χωρίς email «παραλείφθηκε».
+function liEnabled_(item) {
+  if (!liWanted_(item) || !liReady_()) return false;
+  const since = prop_('LI_SINCE', '');
+  return !since || new Date(item.publish_at) >= new Date(since);
+}
+
+function lowerHeaders_(h) {
+  const o = {};
+  Object.keys(h || {}).forEach(function (k) { o[k.toLowerCase()] = h[k]; });
+  return o;
+}
+
+function liFetch_(method, path, body, versioned) {
+  const tok = prop_('LI_TOKEN', '');
+  if (!tok) throw new Error('Λείπει το LI_TOKEN στις Ιδιότητες σεναρίου');
+  const headers = { Authorization: 'Bearer ' + tok };
+  if (versioned !== false) {
+    headers['Linkedin-Version'] = prop_('LI_VERSION', CFG.LI_VERSION);
+    headers['X-Restli-Protocol-Version'] = '2.0.0';
+  }
+  const opt = { method: method, muteHttpExceptions: true, headers: headers };
+  if (body) { opt.contentType = 'application/json'; opt.payload = JSON.stringify(body); }
+  const res = UrlFetchApp.fetch(CFG.LI_API + path, opt);
+  const code = res.getResponseCode(), text = res.getContentText();
+  let b = {};
+  try { b = JSON.parse(text || '{}'); } catch (e) { b = { raw: text }; }
+  if (code >= 400) {
+    let m = 'LinkedIn ' + code + ': ' + String(b.message || text).slice(0, 400) + (b.code ? ' [' + b.code + ']' : '');
+    if (code === 401) m += ' — το LI_TOKEN έληξε ή ακυρώθηκε: βγάλε νέο (οδηγίες στο email υπενθύμισης / στο linkedinSetup).';
+    throw new Error(m);
+  }
+  return { body: b, headers: lowerHeaders_(res.getAllHeaders()) };
+}
+
+// Ανέβασμα bytes σε URL του LinkedIn. Αν απορριφθεί (401/403), ξαναδοκιμάζει με/χωρίς token.
+// Το token στέλνεται μόνο σε διευθύνσεις *.linkedin.com.
+function liPut_(url, blob, withAuth) {
+  const send = function (auth) {
+    const o = { method: 'put', contentType: 'application/octet-stream', payload: blob, muteHttpExceptions: true };
+    if (auth && /^https:\/\/([a-z0-9-]+\.)*linkedin\.com\//i.test(url)) o.headers = { Authorization: 'Bearer ' + prop_('LI_TOKEN', '') };
+    return UrlFetchApp.fetch(url, o);
+  };
+  let r = send(withAuth);
+  if (r.getResponseCode() === 401 || r.getResponseCode() === 403) r = send(!withAuth);
+  if (r.getResponseCode() >= 400) throw new Error('LinkedIn upload ' + r.getResponseCode() + ': ' + r.getContentText().slice(0, 300));
+  return lowerHeaders_(r.getAllHeaders());
+}
+
+function fetchBlob_(url) {
+  const r = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  if (r.getResponseCode() !== 200) throw new Error('HTTP ' + r.getResponseCode() + ' για ' + url);
+  return r.getBlob();
+}
+
+function liUploadImage_(url, author) {
+  const init = liFetch_('post', '/rest/images?action=initializeUpload', { initializeUploadRequest: { owner: author } }).body.value;
+  liPut_(init.uploadUrl, fetchBlob_(url), true);
+  return init.image;
+}
+
+function liUploadVideo_(url, author) {
+  const bytes = fetchBlob_(url).getBytes();
+  const init = liFetch_('post', '/rest/videos?action=initializeUpload', {
+    initializeUploadRequest: { owner: author, fileSizeBytes: bytes.length, uploadCaptions: false, uploadThumbnail: false },
+  }).body.value;
+  const etags = (init.uploadInstructions || []).map(function (u) {
+    const part = Utilities.newBlob(bytes.slice(u.firstByte, u.lastByte + 1), 'application/octet-stream');
+    const h = liPut_(u.uploadUrl, part, false);
+    if (!h.etag) throw new Error('LinkedIn upload: δεν ήρθε ETag για το κομμάτι ' + u.firstByte + '–' + u.lastByte);
+    return String(h.etag).replace(/"/g, '');
+  });
+  liFetch_('post', '/rest/videos?action=finalizeUpload', {
+    finalizeUploadRequest: { video: init.video, uploadToken: init.uploadToken || '', uploadedPartIds: etags },
+  });
+  return init.video;
+}
+
+// Κείμενο για το LinkedIn («little text format»): οι ειδικοί χαρακτήρες θέλουν \ μπροστά,
+// τα #hashtags γίνονται {hashtag|\#|λέξη}.
+function liText_(s) {
+  const tags = [];
+  let t = String(s || '').replace(/#([0-9A-Za-zÀ-ɏͰ-Ͽἀ-῿]+)/g, function (m, w) {
+    tags.push(w);
+    return '\u0000' + (tags.length - 1) + '\u0000';
+  });
+  t = t.replace(/[\\|{}@\[\]()<>#*_~]/g, '\\$&');
+  return t.replace(/\u0000(\d+)\u0000/g, function (m, i) { return '{hashtag|\\#|' + tags[Number(i)] + '}'; });
+}
+
+function publishLi_(item) {
+  const S = P_();
+  const author = prop_('LI_AUTHOR', '');
+  const text = String(item.caption || '');
+  if (text.length > CFG.LI_MAX_CHARS) throw new Error('LinkedIn: το κείμενο έχει ' + text.length + ' χαρακτήρες (όριο ' + CFG.LI_MAX_CHARS + ')');
+  // Τα αρχεία που ανέβηκαν κρατιούνται, ώστε μια νέα προσπάθεια να μην τα ξανανεβάζει.
+  const mk = 'limedia_' + item.id;
+  let media = null;
+  try { media = JSON.parse(S.getProperty(mk) || 'null'); } catch (e) {}
+  if (!media) {
+    if (item.type === 'REEL') media = { video: liUploadVideo_(item.video, author) };
+    else if (item.type === 'TEXT') media = {};
+    else media = { images: (item.images || []).slice(0, 20).map(function (u) { return liUploadImage_(u, author); }) };
+    S.setProperty(mk, JSON.stringify(media));
+  }
+  const body = {
+    author: author,
+    commentary: liText_(text),
+    visibility: 'PUBLIC',
+    distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+    lifecycleState: 'PUBLISHED',
+    isReshareDisabledByAuthor: false,
+  };
+  if (media.video) body.content = { media: item.title ? { id: media.video, title: item.title } : { id: media.video } };
+  else if (media.images && media.images.length === 1) body.content = { media: { id: media.images[0] } };
+  else if (media.images && media.images.length > 1) body.content = { multiImage: { images: media.images.map(function (id) { return { id: id }; }) } };
+  // Το βίντεο θέλει λίγο χρόνο επεξεργασίας στο LinkedIn: έως 4 προσπάθειες ανά 20″ (και ξανά στο επόμενο run).
+  const tries = media.video ? 4 : 1;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = liFetch_('post', '/rest/posts', body);
+      const urn = r.headers['x-restli-id'] || r.body.id || '';
+      S.deleteProperty(mk);
+      return { id: urn, link: urn ? 'https://www.linkedin.com/feed/update/' + urn + '/' : '' };
+    } catch (e) {
+      if (/PROCESSING_FAILED/.test(e.message)) { S.deleteProperty(mk); throw e; }   // ξανανέβασμα στην επόμενη προσπάθεια
+      const waiting = /WAITING_UPLOAD|PROCESSING|not ready|processing/i.test(e.message);
+      if (!waiting || i === tries - 1) throw e;
+      Utilities.sleep(20000);
+    }
+  }
+}
+
+function liTokenHash_(tok) {
+  return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, tok)).slice(0, 16);
+}
+
+function liRenewHelp_() {
+  return 'Για νέο token (2 λεπτά):\n' +
+    '1. https://www.linkedin.com/developers/tools/oauth/token-generator\n' +
+    '2. Διάλεξε την εφαρμογή σου, τσέκαρε openid, profile, w_member_social → Request access token → Allow.\n' +
+    '3. Copy token → Apps Script «IG Publisher» → Ρυθμίσεις έργου → Ιδιότητες σεναρίου → LI_TOKEN = το νέο token → Αποθήκευση.\n' +
+    'Τίποτε άλλο: το script το καταλαβαίνει μόνο του στο επόμενο δεκάλεπτο.';
+}
+
+// Σε κάθε run: νέο token → ημερομηνία, προφίλ (LI_AUTHOR) και LI_SINCE· υπενθυμίσεις λήξης στις 50/57/59 ημέρες.
+function liTokenCheck_(S, now, force) {
+  const tok = prop_('LI_TOKEN', '');
+  if (!tok || prop_('LI_ENABLED', 'true') === 'false') return;
+  const h = liTokenHash_(tok);
+  const fresh = S.getProperty('LI_TOKEN_HASH') !== h;
+  if (fresh) {
+    S.setProperty('LI_TOKEN_HASH', h);
+    S.setProperty('LI_TOKEN_AT', now.toISOString());
+    S.deleteProperty('LI_WARNED');
+  }
+  if (fresh || force || !S.getProperty('LI_AUTHOR')) {
+    try {
+      const me = liFetch_('get', '/v2/userinfo', null, false).body;
+      if (!me.sub) throw new Error('το LinkedIn δεν έδωσε το ID του προφίλ (λείπει το scope openid;)');
+      S.setProperty('LI_AUTHOR', 'urn:li:person:' + me.sub);
+      S.setProperty('LI_NAME', me.name || '');
+      if (!S.getProperty('LI_SINCE')) S.setProperty('LI_SINCE', now.toISOString());
+      S.deleteProperty('LI_ERR');
+    } catch (e) {
+      if (S.getProperty('LI_ERR') !== h) {
+        S.setProperty('LI_ERR', h);
+        notify_('LinkedIn: το token δεν δουλεύει', 'Το LI_TOKEN δεν δέχτηκε (' + e.message + ').\n' +
+          'Βεβαιώσου ότι στο token τσέκαρες openid, profile ΚΑΙ w_member_social.\n\n' + liRenewHelp_());
+      }
+      if (force) throw e;
+      return;
+    }
+  }
+  const days = (now - new Date(S.getProperty('LI_TOKEN_AT') || now)) / 864e5;
+  const step = days >= 59 ? 3 : days >= 57 ? 2 : days >= 50 ? 1 : 0;
+  if (step > Number(S.getProperty('LI_WARNED') || 0)) {
+    S.setProperty('LI_WARNED', String(step));
+    const left = Math.max(0, Math.round(CFG.LI_TOKEN_DAYS - days));
+    notify_('LinkedIn: το token λήγει σε ' + left + (left === 1 ? ' ημέρα' : ' ημέρες'),
+      'Το token του LinkedIn λήγει σε περίπου ' + left + ' ' + (left === 1 ? 'ημέρα' : 'ημέρες') + '. Μετά, τα posts του LinkedIn σταματούν (Instagram/Facebook συνεχίζουν κανονικά).\n\n' + liRenewHelp_());
+  }
+}
+
 // ------------------------------------------------------------------ main loop (trigger)
-// Instagram και Facebook παρακολουθούνται χωριστά: αν αποτύχει το ένα, το άλλο δεν ξαναδημοσιεύεται.
-// Κλειδιά: Instagram done_/fail_/skip_<id>, Facebook fbdone_/fbfail_/fbskip_<id>
+// Instagram, Facebook και LinkedIn παρακολουθούνται χωριστά: αν αποτύχει το ένα, τα άλλα δεν ξαναδημοσιεύονται.
+// Κλειδιά: Instagram done_/fail_/skip_<id>, Facebook fbdone_/fbfail_/fbskip_<id>, LinkedIn lidone_/lifail_/liskip_<id>
 function targets_(item) {
-  const t = [{ pre: '', label: 'Instagram', fn: publishItem_, link: function (r) { return r.permalink || r.mediaId; } }];
+  const t = [];
+  if (igEnabled_(item)) t.push({ pre: '', label: 'Instagram', fn: publishItem_, link: function (r) { return r.permalink || r.mediaId; } });
   if (fbEnabled_(item)) t.push({ pre: 'fb', label: 'Facebook', fn: publishFb_, link: function (r) { return r.link || r.id; } });
+  if (liEnabled_(item)) t.push({ pre: 'li', label: 'LinkedIn', fn: publishLi_, link: function (r) { return r.link || r.id; } });
   return t;
 }
 
@@ -403,6 +609,7 @@ function run() {
     if (prop_('PAUSED', 'false') === 'true') { syncSheet_(q); return; }
     const S = P_();
     const now = new Date();
+    try { liTokenCheck_(S, now, false); } catch (e) { console.log('LinkedIn token: ' + e.message); }
     q.items.forEach(function (item) {
       const when = new Date(item.publish_at);
       if (when > now) return;
@@ -577,15 +784,17 @@ function status_(S, pre, id) {
 }
 
 function syncSheet_(q) {
-  const H = ['Ώρα δημοσίευσης', 'Λογαριασμός', 'Τύπος', 'Λεζάντα', 'Αρχεία', 'Instagram', 'Link Instagram', 'Facebook', 'Link Facebook', 'ID'];
+  const H = ['Ώρα δημοσίευσης', 'Λογαριασμός', 'Τύπος', 'Λεζάντα', 'Αρχεία', 'Instagram', 'Link Instagram', 'Facebook', 'Link Facebook', 'ID', 'LinkedIn', 'Link LinkedIn'];
   const sh = sheet_('Ουρά', H);
   sh.getRange(1, 1, 1, H.length).setValues([H]).setFontWeight('bold');
   const S = P_();
   const rows = q.items.map(function (it) {
-    const ig = status_(S, '', it.id);
+    const ig = igEnabled_(it) ? status_(S, '', it.id) : ['—', ''];
     const fb = fbEnabled_(it) ? status_(S, 'fb', it.id) : ['—', ''];
+    const li = !liWanted_(it) ? ['—', ''] : !liReady_() ? ['Δεν έχει συνδεθεί', ''] : liEnabled_(it) ? status_(S, 'li', it.id) : ['Πριν τη σύνδεση', ''];
     const files = (it.images || []).length + (it.video ? 1 : 0);
-    return [new Date(it.publish_at), it.account, it.type, String(it.caption || '').slice(0, 120), files, ig[0], ig[1], fb[0], fb[1], it.id];
+    return [new Date(it.publish_at), it.account + (liWanted_(it) && !igEnabled_(it) ? ' (LinkedIn)' : ''), it.type,
+      String(it.caption || '').slice(0, 120), files, ig[0], ig[1], fb[0], fb[1], it.id, li[0], li[1]];
   });
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, H.length).clearContent();
   if (rows.length) {
@@ -674,7 +883,7 @@ function dryRun() {
   const now = new Date();
   ['NDT', 'AMAZE'].forEach(function (acc) {
     const next = q.items.filter(function (it) {
-      return it.account === acc && !S.getProperty('done_' + it.id) && new Date(it.publish_at) > now && it.images && it.images.length;
+      return it.account === acc && igEnabled_(it) && !S.getProperty('done_' + it.id) && new Date(it.publish_at) > now && it.images && it.images.length;
     })[0];
     if (!next) { console.log(acc + ': δεν υπάρχει επόμενη δημοσίευση με εικόνα.'); return; }
     const ig = igUserId_(acc), tok = token_(acc);
@@ -696,7 +905,7 @@ function dryRunReel() {
   const q = fetchQueue_();
   const now = new Date();
   ['NDT', 'AMAZE'].forEach(function (acc) {
-    const next = q.items.filter(function (it) { return it.type === 'REEL' && it.account === acc && new Date(it.publish_at) > now; })[0];
+    const next = q.items.filter(function (it) { return it.type === 'REEL' && igEnabled_(it) && it.account === acc && new Date(it.publish_at) > now; })[0];
     if (!next) { console.log(acc + ': δεν υπάρχει επόμενο reel στην ουρά.'); return; }
     const ig = igUserId_(acc), tok = token_(acc);
     const trial = trialOn_(next);
@@ -770,7 +979,7 @@ function reelTexts_(it, base) {
 
 function syncReelsToDrive_(q, maxPerRun) {
   const S = P_();
-  const reels = q.items.filter(function (it) { return it.type === 'REEL'; });
+  const reels = q.items.filter(function (it) { return it.type === 'REEL' && igEnabled_(it); });
   const key = function (it) { return it.id + '|' + it.video; };
   let done = [];
   try { done = JSON.parse(S.getProperty('REELS_SYNCED') || '[]'); } catch (e) {}
@@ -811,6 +1020,31 @@ function syncReelsToDrive_(q, maxPerRun) {
   const live = reels.map(key);
   S.setProperty('REELS_SYNCED', JSON.stringify(done.filter(function (k) { return live.indexOf(k) >= 0; })));
   return n;
+}
+
+// Τρέξ' το μία φορά αφού βάλεις το LI_TOKEN. Δεν δημοσιεύει τίποτα.
+function linkedinSetup() {
+  if (!prop_('LI_TOKEN', '')) {
+    console.log('Βάλε πρώτα το LI_TOKEN στις Ιδιότητες σεναρίου.\n\n' + liRenewHelp_());
+    return;
+  }
+  const S = P_(), now = new Date();
+  liTokenCheck_(S, now, true);
+  const at = new Date(S.getProperty('LI_TOKEN_AT') || now);
+  const exp = new Date(at.getTime() + CFG.LI_TOKEN_DAYS * 864e5);
+  console.log('LinkedIn OK: ' + (prop_('LI_NAME', '') || '(χωρίς όνομα)') + ' (' + prop_('LI_AUTHOR', '') + ')');
+  console.log('Token: λήγει γύρω στις ' + athens_(exp, 'd/M/yyyy') + ' — θα έρθει email υπενθύμισης 10 ημέρες πριν.');
+  console.log('Posts LinkedIn από ' + athens_(new Date(prop_('LI_SINCE', now.toISOString())), 'd/M/yyyy HH:mm') + ' και μετά.' +
+    (prop_('LI_ENABLED', 'true') === 'false' ? ' ΠΡΟΣΟΧΗ: LI_ENABLED = false, το LinkedIn είναι σε παύση.' : ''));
+  const q = fetchQueue_();
+  const next = q.items.filter(function (it) { return liEnabled_(it) && !S.getProperty('lidone_' + it.id) && new Date(it.publish_at) > now; });
+  if (!next.length) console.log('Δεν υπάρχουν επόμενα posts LinkedIn στην ουρά.');
+  next.slice(0, 5).forEach(function (it) {
+    const d = new Date(it.publish_at);
+    console.log('  ' + DAYS_SHORT_[dow_(d)] + ' ' + athens_(d, 'd/M HH:mm') + ' · ' + it.type + ' · ' + String(it.caption || '').split('\n')[0].slice(0, 80));
+  });
+  syncSheet_(q);
+  console.log('Τίποτα δεν δημοσιεύτηκε.');
 }
 
 function syncReelsNow() {
