@@ -29,7 +29,8 @@
  *                   (η ουρά γράφει μόνο το μικρό όνομα στο "people" του post· τα usernames μένουν εδώ)
  *   REEL_STORY      false για να ΜΗΝ βγαίνει κάθε reel και ως story (προεπιλογή: βγαίνει, 15′ μετά το reel)
  *   MANUAL_REEL_STORY false για να ΜΗΝ μπαίνουν σε story τα reels που ανεβάζετε εσείς από την εφαρμογή
- *   LI_TOKEN        access token του LinkedIn (προσωπικό προφίλ· scopes openid, profile, w_member_social).
+ *   LI_TOKEN        access token του LinkedIn (προσωπικό προφίλ· scopes openid, profile, w_member_social),
+ *                   μπαίνει από το μενού «⚙️ Publisher → LinkedIn: νέο token…» του Sheet.
  *                   Λήγει στις 60 ημέρες: έρχεται email στις 50, 57 και 59 ημέρες. Αλλάζεις μόνο αυτό· τα υπόλοιπα
  *                   LI_* (LI_AUTHOR, LI_NAME, LI_SINCE, LI_TOKEN_AT) τα γράφει μόνο του το script.
  *   LI_ENABLED      false για να σταματήσει μόνο το LinkedIn
@@ -45,6 +46,9 @@
  *   syncReelsNow()      αντιγράφει τώρα τα reels της ουράς στο Drive (ΥΛΙΚΟ SOCIAL MEDIA/REELS), με .txt για
  *                       YouTube Shorts / TikTok. Γίνεται και αυτόματα σε κάθε εκτέλεση του run().
  *   linkedinSetup()     μετά το LI_TOKEN: βρίσκει το προφίλ σου και δείχνει τα επόμενα posts LinkedIn (δεν δημοσιεύει)
+ *
+ * Μενού «⚙️ Publisher» στο Sheet (onOpen): «LinkedIn: νέο token…», «Αλλαγή ρύθμισης…», «Δες τις ρυθμίσεις».
+ * Χρειάζεται επειδή, με πάνω από 50 Ιδιότητες σεναρίου, η οθόνη του Apps Script τις δείχνει μόνο για ανάγνωση.
  *   setup()             βάζει τον αυτόματο έλεγχο κάθε 10 λεπτά
  *   pause() / resume()  παύση / συνέχεια
  */
@@ -557,8 +561,8 @@ function liRenewHelp_() {
   return 'Για νέο token (2 λεπτά):\n' +
     '1. https://www.linkedin.com/developers/tools/oauth/token-generator\n' +
     '2. Διάλεξε την εφαρμογή σου, τσέκαρε openid, profile, w_member_social → Request access token → Allow.\n' +
-    '3. Copy token → Apps Script «IG Publisher» → Ρυθμίσεις έργου → Ιδιότητες σεναρίου → LI_TOKEN = το νέο token → Αποθήκευση.\n' +
-    'Τίποτε άλλο: το script το καταλαβαίνει μόνο του στο επόμενο δεκάλεπτο.';
+    '3. Copy token → άνοιξε το Sheet «IG Publisher» από υπολογιστή → μενού ⚙️ Publisher → «LinkedIn: νέο token…» → επικόλληση → OK.\n' +
+    'Τίποτε άλλο: θα δεις αμέσως ότι συνδέθηκε.';
 }
 
 // Σε κάθε run: νέο token → ημερομηνία, προφίλ (LI_AUTHOR) και LI_SINCE· υπενθυμίσεις λήξης στις 50/57/59 ημέρες.
@@ -1032,10 +1036,91 @@ function syncReelsToDrive_(q, maxPerRun) {
   return n;
 }
 
+// ------------------------------------------------------------------ μενού «⚙️ Publisher» στο Sheet
+// Οι Ιδιότητες σεναρίου είναι πάνω από 50 (done_/fail_/… ανά δημοσίευση), οπότε η οθόνη του Apps Script
+// τις δείχνει μόνο για ανάγνωση. Οι ρυθμίσεις (token LinkedIn, CREW_TAGS_*, CREW_MAP, παύσεις) γίνονται από εδώ.
+const STATUS_KEY_ = /^(li|fb)?(done|fail|skip)_|^limedia_|^rs(fail|skip)_/;
+function secretKey_(k) { return /TOKEN|KEY|SECRET|HASH/.test(k) && !/_AT$/.test(k); }
+
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('⚙️ Publisher')
+    .addItem('LinkedIn: νέο token…', 'menuLinkedInToken')
+    .addItem('Αλλαγή ρύθμισης…', 'menuSetProperty')
+    .addItem('Δες τις ρυθμίσεις', 'menuShowSettings')
+    .addToUi();
+}
+
+function mask_(v) { v = String(v || ''); return v.length <= 10 ? '••••' : v.slice(0, 4) + '…' + v.slice(-4) + ' (' + v.length + ' χαρ.)'; }
+
+function menuLinkedInToken() {
+  const ui = SpreadsheetApp.getUi();
+  const r = ui.prompt('LinkedIn: νέο token', 'Επικόλλησε το token από το Token Generator του LinkedIn (openid, profile, w_member_social):', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  const t = r.getResponseText().replace(/\s+/g, '');
+  if (!t) return;
+  // Έλεγχος ΠΡΙΝ την αποθήκευση: ένα λάθος token δεν αντικαθιστά το σωστό.
+  const chk = UrlFetchApp.fetch(CFG.LI_API + '/v2/userinfo', { headers: { Authorization: 'Bearer ' + t }, muteHttpExceptions: true });
+  let me = {};
+  try { me = JSON.parse(chk.getContentText() || '{}'); } catch (e) {}
+  if (chk.getResponseCode() !== 200 || !me.sub) {
+    ui.alert('LinkedIn: δεν συνδέθηκε', 'Το LinkedIn δεν δέχτηκε αυτό το token (' + chk.getResponseCode() + ': ' + String(me.message || chk.getContentText()).slice(0, 150) +
+      ').\nΔεν άλλαξε τίποτα.\n\nΒγάλε νέο token και τσέκαρε και τα τρία: openid, profile, w_member_social.', ui.ButtonSet.OK);
+    return;
+  }
+  P_().setProperty('LI_TOKEN', t);
+  try {
+    liTokenCheck_(P_(), new Date(), true);
+    const at = new Date(prop_('LI_TOKEN_AT', new Date().toISOString()));
+    ui.alert('LinkedIn OK', 'Συνδέθηκε το προφίλ: ' + (prop_('LI_NAME', '') || prop_('LI_AUTHOR', '')) +
+      '\nΤο token λήγει γύρω στις ' + athens_(new Date(at.getTime() + CFG.LI_TOKEN_DAYS * 864e5), 'd/M/yyyy') +
+      ' (θα έρθει email 10 ημέρες πριν).\nΤα posts του LinkedIn βγαίνουν πλέον αυτόματα.', ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert('LinkedIn: δεν συνδέθηκε', e.message + '\n\nΒγάλε νέο token και τσέκαρε και τα τρία: openid, profile, w_member_social.', ui.ButtonSet.OK);
+  }
+  try { syncSheet_(fetchQueue_()); } catch (e) { console.log('Ουρά: ' + e.message); }
+}
+
+function menuSetProperty() {
+  const ui = SpreadsheetApp.getUi();
+  const k = ui.prompt('Αλλαγή ρύθμισης', 'Όνομα ρύθμισης, π.χ. CREW_TAGS_NDT, CREW_TAGS_AMAZE, CREW_MAP, LI_ENABLED, FB_ENABLED, PAUSED:', ui.ButtonSet.OK_CANCEL);
+  if (k.getSelectedButton() !== ui.Button.OK) return;
+  const key = k.getResponseText().trim();
+  if (!/^[A-Za-z0-9_]+$/.test(key)) { ui.alert('Μη έγκυρο όνομα: «' + key + '»'); return; }
+  if (STATUS_KEY_.test(key)) { ui.alert('Το ' + key + ' το κρατάει μόνο του το script (κατάσταση δημοσίευσης). Δεν αλλάζει από εδώ.'); return; }
+  const secret = secretKey_(key);
+  const cur = P_().getProperty(key);
+  const v = ui.prompt(key, 'Τωρινή τιμή: ' + (cur === null ? '(δεν υπάρχει)' : secret ? mask_(cur) : cur) +
+    '\n\nΝέα τιμή (άφησέ το κενό για διαγραφή):', ui.ButtonSet.OK_CANCEL);
+  if (v.getSelectedButton() !== ui.Button.OK) return;
+  const val = v.getResponseText().trim();
+  if (!val) {
+    if (cur === null) return;
+    if (ui.alert('Διαγραφή του ' + key + ';', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+    P_().deleteProperty(key);
+    ui.alert('Διαγράφηκε: ' + key);
+    return;
+  }
+  P_().setProperty(key, val);
+  ui.alert('Αποθηκεύτηκε: ' + key + ' = ' + (secret ? mask_(val) : val));
+}
+
+function menuShowSettings() {
+  const all = P_().getProperties();
+  let status = 0;
+  const lines = Object.keys(all).sort().filter(function (k) {
+    if (STATUS_KEY_.test(k)) { status++; return false; }
+    return true;
+  }).map(function (k) {
+    const v = secretKey_(k) ? mask_(all[k]) : String(all[k]);
+    return k + ' = ' + (v.length > 90 ? v.slice(0, 90) + '…' : v);
+  });
+  SpreadsheetApp.getUi().alert('Ρυθμίσεις', lines.join('\n') + '\n\n(+ ' + status + ' σημειώσεις κατάστασης δημοσιεύσεων)', SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
 // Τρέξ' το μία φορά αφού βάλεις το LI_TOKEN. Δεν δημοσιεύει τίποτα.
 function linkedinSetup() {
   if (!prop_('LI_TOKEN', '')) {
-    console.log('Βάλε πρώτα το LI_TOKEN στις Ιδιότητες σεναρίου.\n\n' + liRenewHelp_());
+    console.log('Βάλε πρώτα το token: Sheet → μενού ⚙️ Publisher → «LinkedIn: νέο token…».\n\n' + liRenewHelp_());
     return;
   }
   const S = P_(), now = new Date();
