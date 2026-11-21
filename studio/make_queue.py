@@ -7,7 +7,8 @@ REPO_RAW = 'https://raw.githubusercontent.com/malamaspe/social-media-assets/main
 TIMES = {'NDT': ('20:00', '20:05'), 'AMAZE': ('21:00', '21:05')}
 # Προαιρετικά κείμενα για YouTube Shorts / TikTok ανά reel, στο captions.json με κλειδί '<BRAND>|<YYYY-MM-DD>|reel'.
 # Το Apps Script τα γράφει σε .txt δίπλα στο mp4, στον φάκελο Drive «ΥΛΙΚΟ SOCIAL MEDIA/REELS».
-REEL_META = ('title', 'yt_title', 'yt_description', 'tiktok_caption', 'yt_tags')
+REEL_META = ('title', 'yt_title', 'yt_description', 'tiktok_caption', 'yt_tags', 'source')
+# source: "smm" για reel του social media manager (studio/smm_reel.py)· "story": false αν είναι πάνω από 60″.
 # yt_tags: ετικέτες για το πεδίο «Ετικέτες» (Tags) του YouTube Studio, ΟΧΙ για την περιγραφή
 # (πολλές λέξεις-κλειδιά στην περιγραφή = spam κατά τους κανόνες του YouTube).
 # Όριο YouTube: 500 χαρακτήρες συνολικά· μετράνε τα κόμματα και +2 για κάθε ετικέτα με κενό.
@@ -71,6 +72,8 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
                       'video': url(reel), 'caption': caps[f'{brand}|{d}']}
                 meta = caps.get(f'{brand}|{d}|reel') or {}
                 it.update({k: meta[k] for k in REEL_META if meta.get(k)})
+                if meta.get('story') is False:
+                    it['story'] = False
                 if it.get('yt_tags'):
                     it['yt_tags'] = clean_tags(it['yt_tags'], f'{brand}|{d}|reel')
                 if caps.get(f'{brand}|{d}|people'):
