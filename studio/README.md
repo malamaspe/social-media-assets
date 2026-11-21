@@ -28,3 +28,9 @@ mkdir -p assets && cp logos/*.png assets/
 Κάθε στατικό story γίνεται σύντομο βίντεο με μουσική από το `music_library.json`:
 `python3 story_video.py out/<φάκελος>/<BRAND>/<ημ/νία>_story_01.jpg <track_id> out/<φάκελος>/<BRAND>/<ημ/νία>_story_01.mp4 [12|15]`
 (12″, ή 15″ για stories με πολύ κείμενο / λίστες / κριτικές). Το mp4 μπαίνει δίπλα στο jpg με το ίδιο όνομα· το `make_queue.py` το βάζει στο `video` του story (το jpg μένει για δοκιμές). Προαιρετικά `captions.json` '<BRAND>|<ημ/νία>|story_music' = «Τίτλος — Καλλιτέχνης». Ταίριαξε κομμάτι με ύφος (NDT house/chill/corporate· Amaze romantic/cocktail για γάμους και κριτικές, party για πάρτι) και μην επαναλαμβάνεις το ίδιο σε κοντινές μέρες. Ο ήχος κατεβαίνει σε cache εκτός repo (`MUSIC_CACHE`, προεπιλογή /tmp/music_cache)· ποτέ mp3 στο repo.
+
+## LinkedIn (απόφαση 21/11)
+Posts για το προσωπικό προφίλ του Πέτρου, μόνο για την NDT (το εταιρικό κοινό είναι εκεί· η Amaze όχι). 3 την εβδομάδα, Τρίτη–Πέμπτη 08:45.
+1. Γράψε `studio/linkedin/<ημ/νία πρώτου>.json`: λίστα `{"date", "time", "from": "<id post Instagram της ουράς>", "text"}` (πρότυπο: `studio/linkedin/2026-11-24.json`). Χωρίς `from` = μόνο κείμενο· `slides` για υποσύνολο εικόνων· reel → βίντεο.
+2. `python3 linkedin_queue.py linkedin/<αρχείο>.json ..` → γράφει στο `linkedin.json` (ποτέ στο `queue.json`) → commit & push.
+Κείμενα: πρώτο πρόσωπο (ο Πέτρος, Event Director της NDT), πληθυντικός ευγενείας, άγκιστρο στις 2 πρώτες γραμμές, σύντομες παράγραφοι, λίστες με αριθμούς ή →, CTA «στείλτε μου μήνυμα», 3–5 hashtags στο τέλος, χωρίς links και χωρίς @. Όχι αντιγραφή της λεζάντας Instagram: πρακτική γνώση για HR / marketing / γραμματείες / agencies, case studies με κριτικές ΑΥΤΟΥΣΙΕΣ. Ποτέ τιμές, προσφορές ή «τελευταίες ημερομηνίες» που δεν έχει πει ο Πέτρος. Όριο 3000 χαρακτήρες (στόχος < 1300).
