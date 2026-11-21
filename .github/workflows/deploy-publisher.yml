@@ -1,0 +1,144 @@
+# Αυτόματη ενημέρωση του Apps Script του Sheet «IG Publisher» από τον φάκελο publisher/ (όπως στην NDT OPS).
+# push στο main με αλλαγή στο publisher/ → έλεγχος σύνταξης → σύγκριση με το live → clasp push
+# → νέα έκδοση της web app (Upload.gs, συντόμευση iPhone) στο ίδιο link → επαλήθευση → ετικέτα deployed-publisher.
+# Αν κάποιος άλλαξε κώδικα απευθείας στον editor, σταματά χωρίς να ανεβάσει τίποτα (και έρχεται email αποτυχίας).
+# Χειροκίνητα: Actions → Deploy publisher → Run workflow:
+#   check  = μόνο σύγκριση live ↔ repo, δεν αλλάζει τίποτα
+#   deploy = κανονικό ανέβασμα (με τον έλεγχο του editor)
+#   force  = ανέβασμα ακόμα κι αν άλλαξε κάτι στον editor (η πρώτη φορά γίνεται έτσι)
+# Secrets (Settings → Secrets and variables → Actions): CLASPRC_JSON (κλειδί clasp του λογαριασμού Google,
+# το ίδιο με της NDT OPS) και IG_SCRIPT_ID (Script ID του IG Publisher). Χωρίς αυτά απλώς παραλείπεται.
+# Οι Ιδιότητες σεναρίου (tokens κ.λπ.) και οι triggers ΔΕΝ αγγίζονται: το clasp ανεβάζει μόνο κώδικα.
+name: Deploy publisher
+on:
+  push:
+    branches: [main]
+    paths: ['publisher/**', '.github/workflows/deploy-publisher.yml', '.github/gas/**']
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check = μόνο σύγκριση · deploy = κανονικό ανέβασμα · force = ανέβασμα και πάνω από αλλαγές του editor'
+        type: choice
+        options: [check, deploy, force]
+        default: check
+concurrency:
+  group: deploy-publisher
+  cancel-in-progress: false
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.g.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: g
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          IG_SCRIPT_ID: ${{ secrets.IG_SCRIPT_ID }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$IG_SCRIPT_ID" ]; then
+            echo "::notice::Λείπουν τα secrets CLASPRC_JSON / IG_SCRIPT_ID — παράλειψη, δεν ανέβηκε τίποτα."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" != "workflow_dispatch" ] && ! git rev-parse -q --verify refs/tags/deployed-publisher >/dev/null; then
+            echo "::notice::Δεν έχει γίνει ακόμα το πρώτο χειροκίνητο ανέβασμα (check και μετά force) — παράλειψη."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'deploy' }}
+      IG_SCRIPT_ID: ${{ secrets.IG_SCRIPT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Έλεγχος σύνταξης (.gs και appsscript.json)
+        run: |
+          for f in publisher/*.gs; do cp "$f" /tmp/chk.js; node --check /tmp/chk.js || { echo "::error::Συντακτικό λάθος στο $f — δεν ανέβηκε τίποτα."; exit 1; }; done
+          node -e "JSON.parse(require('fs').readFileSync('publisher/appsscript.json','utf8'))" || { echo "::error::Χαλασμένο publisher/appsscript.json"; exit 1; }
+      - name: clasp
+        run: npm install -g @google/clasp@3.4.1
+      - name: Κλειδί clasp
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json && chmod 600 ~/.clasprc.json
+      - name: Προετοιμασία (repo και live)
+        run: |
+          mk() { mkdir -p "$1/src"; node -e "require('fs').writeFileSync(process.argv[1]+'/.clasp.json', JSON.stringify({scriptId: process.env.IG_SCRIPT_ID, rootDir: 'src', scriptExtensions: ['.gs', '.js'], htmlExtensions: ['.html']}))" "$1"; }
+          mk /tmp/stage && cp publisher/*.gs publisher/appsscript.json /tmp/stage/src/
+          ls publisher/*.html >/dev/null 2>&1 && cp publisher/*.html /tmp/stage/src/ || true
+          mk /tmp/live && (cd /tmp/live && clasp pull)
+          echo "Live: $(ls /tmp/live/src | tr '\n' ' ')"
+      - name: Σύγκριση live ↔ repo
+        id: diff
+        run: node .github/gas/compare_gas.js /tmp/live/src /tmp/stage/src --github-output changed
+      - name: Έλεγχος — άλλαξε κάτι στον editor εκτός repo;
+        if: env.MODE == 'deploy'
+        run: |
+          if ! BASE=$(git rev-parse -q --verify refs/tags/deployed-publisher); then
+            echo "::error::Πρώτη φορά: τρέξε πρώτα με check και μετά με force."; exit 1
+          fi
+          mkdir -p /tmp/base && git archive "$BASE" publisher | tar -x -C /tmp/base
+          if ! node .github/gas/compare_gas.js /tmp/live/src /tmp/base/publisher; then
+            if node .github/gas/compare_gas.js /tmp/live/src /tmp/stage/src; then
+              echo "::notice::Το live είναι ήδη ίδιο με το repo."
+            else
+              echo "::error::Ο κώδικας στο Apps Script άλλαξε έξω από το repo. Δεν ανέβηκε τίποτα. Πρώτα να μπουν αυτές οι αλλαγές στο repo (ή force)."
+              exit 1
+            fi
+          fi
+      - name: Άλλαξαν τα δικαιώματα (oauthScopes);
+        id: scopes
+        run: |
+          node -e "
+            const fs=require('fs'), r=f=>{try{return (JSON.parse(fs.readFileSync(f,'utf8')).oauthScopes||[]).slice().sort().join(' ')}catch(e){return ''}};
+            const a=r('/tmp/live/src/appsscript.json'), b=r('/tmp/stage/src/appsscript.json');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'changed='+(a!==b)+'\n');
+            if (a!==b) console.log('Νέα δικαιώματα:', b.split(' ').filter(s=>!a.split(' ').includes(s)).join(', ')||'(αφαιρέθηκαν κάποια)');
+          "
+      - name: Apps Script — push και νέα έκδοση της web app
+        if: env.MODE != 'check' && (steps.diff.outputs.changed == 'true' || env.MODE == 'force')
+        run: |
+          cd /tmp/stage
+          clasp push --force
+          ids=$(clasp --json list-deployments | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s.slice(s.indexOf('[')));console.log(j.filter(d=>d.versionNumber).map(d=>d.deploymentId).join(' '))})")
+          [ -z "$ids" ] && echo "::notice::Δεν βρέθηκε web app για ενημέρωση."
+          for id in $ids; do
+            echo "::add-mask::$id"
+            clasp update-deployment "$id" --description "publisher ${GITHUB_SHA::7}"
+          done
+      - name: Επαλήθευση — το live είναι πλέον ίδιο με το repo
+        if: env.MODE != 'check'
+        run: |
+          mkdir -p /tmp/live2/src && cp /tmp/stage/.clasp.json /tmp/live2/ && (cd /tmp/live2 && clasp pull)
+          node .github/gas/compare_gas.js /tmp/live2/src /tmp/stage/src
+          git tag -f deployed-publisher HEAD
+          git push -qf origin refs/tags/deployed-publisher
+      - name: Σύνοψη
+        if: always()
+        run: |
+          {
+            echo "### Deploy publisher (${MODE})"
+            echo "- Αλλαγές κώδικα: ${{ steps.diff.outputs.changed }}"
+            echo "- Commit: ${GITHUB_SHA::7}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Νέα δικαιώματα θέλουν μία έγκριση από τον Πέτρο. Η αποτυχία εδώ (μετά το ανέβασμα) στέλνει email από το GitHub.
+      - name: Χρειάζεται έγκριση δικαιωμάτων;
+        if: env.MODE != 'check' && steps.scopes.outputs.changed == 'true'
+        run: |
+          echo "::error::Ο κώδικας ανέβηκε, αλλά ζητά νέα δικαιώματα. Άνοιξε το Sheet «IG Publisher» (από υπολογιστή ή σε προβολή υπολογιστή), μενού ⚙️ Publisher → οποιαδήποτε εντολή → «Να επιτρέπεται». Μέχρι τότε οι αυτόματες δημοσιεύσεις μπορεί να αποτυγχάνουν."
+          exit 1
