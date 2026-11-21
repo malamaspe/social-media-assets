@@ -2,7 +2,8 @@
 
 Ο SMM ανεβάζει τελικά mp4 στο Drive «ΥΛΙΚΟ SOCIAL MEDIA/ΝΕΑ REELS SMM/<NDT|AMAZE>».
 Κάθε Παρασκευή είναι ενός brand, εναλλάξ: NDT 18/12/2026, AMAZE 25/12, NDT 1/1/2027 κ.ο.κ.
-Το reel του SMM παίρνει τη θέση του post της ημέρας για το brand του (NDT 20:00 / AMAZE 21:00).
+Το reel του SMM παίρνει τη θέση του post της ημέρας για το brand του και βγαίνει ΠΑΝΤΑ στις 15:00
+(και στα δύο brands, απόφαση Πέτρου 21/11· η ώρα μπαίνει από το make_queue.py, SMM_TIME).
 
 Χρήση:  python3 smm_reel.py <video.mp4> <NDT|AMAZE> <repo_root> <out_dir> [--from YYYY-MM-DD] [--date YYYY-MM-DD]
   - Διαλέγει την επόμενη Παρασκευή του brand (από --from, προεπιλογή σήμερα) που δεν έχει ήδη reel SMM στην ουρά,

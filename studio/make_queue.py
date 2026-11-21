@@ -5,6 +5,9 @@ from zoneinfo import ZoneInfo
 ATH = ZoneInfo('Europe/Athens')
 REPO_RAW = 'https://raw.githubusercontent.com/malamaspe/social-media-assets/main/'
 TIMES = {'NDT': ('20:00', '20:05'), 'AMAZE': ('21:00', '21:05')}
+# Reels του SMM ("source": "smm"): ΠΑΝΤΑ Παρασκευή 15:00 και στα δύο brands (απόφαση Πέτρου 21/11).
+# Παίρνουν τη θέση του post της ημέρας του brand· το story της ημέρας μένει στις :05 του κανονικού ωραρίου.
+SMM_TIME = '15:00'
 # Προαιρετικά κείμενα για YouTube Shorts / TikTok ανά reel, στο captions.json με κλειδί '<BRAND>|<YYYY-MM-DD>|reel'.
 # Το Apps Script τα γράφει σε .txt δίπλα στο mp4, στον φάκελο Drive «ΥΛΙΚΟ SOCIAL MEDIA/REELS».
 REEL_META = ('title', 'yt_title', 'yt_description', 'tiktok_caption', 'yt_tags', 'source')
@@ -68,9 +71,10 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
                 pass  # το reel μπαίνει αργότερα (π.χ. περιμένει μουσική)
             elif os.path.exists(reel):
                 shutil.copy(reel, dst)
-                it = {'id': f'{brand}-{d}-post', 'account': brand, 'type': 'REEL', 'publish_at': at(d, tp),
-                      'video': url(reel), 'caption': caps[f'{brand}|{d}']}
                 meta = caps.get(f'{brand}|{d}|reel') or {}
+                t_reel = SMM_TIME if meta.get('source') == 'smm' else tp
+                it = {'id': f'{brand}-{d}-post', 'account': brand, 'type': 'REEL', 'publish_at': at(d, t_reel),
+                      'video': url(reel), 'caption': caps[f'{brand}|{d}']}
                 it.update({k: meta[k] for k in REEL_META if meta.get(k)})
                 if meta.get('story') is False:
                     it['story'] = False
