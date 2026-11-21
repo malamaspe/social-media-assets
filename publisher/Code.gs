@@ -34,7 +34,7 @@
  *                   LI_* (LI_AUTHOR, LI_NAME, LI_SINCE, LI_TOKEN_AT) τα γράφει μόνο του το script.
  *   LI_ENABLED      false για να σταματήσει μόνο το LinkedIn
  *   LI_VERSION      προαιρετικό, έκδοση LinkedIn API (YYYYMM, προεπιλογή στο CFG)
- *                   Στο LinkedIn πάνε ΜΟΝΟ τα items της ουράς με "platforms": ["linkedin"] (δικά τους κείμενα).
+ *                   Στο LinkedIn πάνε ΜΟΝΟ τα posts του linkedin.json (δικά τους κείμενα), ποτέ τα posts του queue.json.
  *
  * Συναρτήσεις που τρέχεις με το χέρι:
  *   findInstagramIds()  βρίσκει και αποθηκεύει μόνο του τα IDs Instagram και σελίδων Facebook
@@ -58,6 +58,7 @@ const CFG = {
   REEL_STORY_DELAY_MIN: 15,   // το story ενός reel βγαίνει τόσα λεπτά μετά το reel
   MANUAL_REEL_MIN_AGE: 10,    // reels που ανεβάσατε εσείς: story όταν περάσουν 10′ ...
   MANUAL_REEL_MAX_AGE: 180,   // ... και όχι αν έχουν περάσει πάνω από 3 ώρες
+  LI_QUEUE_URL: 'https://raw.githubusercontent.com/malamaspe/social-media-assets/main/linkedin.json',
   LI_API: 'https://api.linkedin.com',
   LI_VERSION: '202611',       // οι εκδόσεις του LinkedIn ισχύουν περίπου 1 χρόνο· αλλάζει με LI_VERSION
   LI_TOKEN_DAYS: 60,
@@ -115,7 +116,7 @@ function fetchQueue_() {
   const res = UrlFetchApp.fetch(CFG.QUEUE_URL + '?nocache=' + Date.now(), { muteHttpExceptions: true });
   if (res.getResponseCode() !== 200) throw new Error('Δεν διαβάστηκε το queue.json (' + res.getResponseCode() + ')');
   const q = JSON.parse(res.getContentText());
-  q.items = withReelStories_(q.items || []);
+  q.items = withReelStories_((q.items || []).concat(liQueue_()));
   q.items.sort(function (a, b) { return new Date(a.publish_at) - new Date(b.publish_at); });
   return q;
 }
@@ -398,8 +399,17 @@ function publishFb_(item) {
 }
 
 // ------------------------------------------------------------------ LinkedIn (προσωπικό προφίλ)
-// Μόνο items με "platforms": ["linkedin"]: δικό τους κείμενο και ώρα, ίδιες εικόνες/βίντεο με το Instagram.
+// Τα posts του LinkedIn είναι στο linkedin.json του repo (χωριστά από το queue.json), με δικό τους κείμενο
+// και ώρα και τις ίδιες εικόνες/βίντεο με το Instagram. Παίρνουν "platforms": ["linkedin"], άρα ΜΟΝΟ LinkedIn.
 // Τύποι: IMAGE (1 εικόνα), CAROUSEL (2–20 εικόνες), REEL (βίντεο mp4), TEXT (μόνο κείμενο).
+function liQueue_() {
+  try {
+    const r = UrlFetchApp.fetch(CFG.LI_QUEUE_URL + '?nocache=' + Date.now(), { muteHttpExceptions: true });
+    if (r.getResponseCode() !== 200) return [];
+    return (JSON.parse(r.getContentText()).items || []).map(function (it) { it.platforms = ['linkedin']; return it; });
+  } catch (e) { console.log('linkedin.json: ' + e.message); return []; }
+}
+
 function igEnabled_(item) { return !item.platforms || item.platforms.indexOf('instagram') >= 0; }
 
 function liWanted_(item) { return !!item.platforms && item.platforms.indexOf('linkedin') >= 0; }

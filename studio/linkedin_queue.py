@@ -8,8 +8,9 @@ posts.json = λίστα από:
           Χωρίς from → post μόνο με κείμενο (TEXT).
   - slides: προαιρετικό, π.χ. [0, 1, 2] για μόνο κάποιες εικόνες του carousel.
   - title: προαιρετικό, τίτλος βίντεο.
-Κάθε post γίνεται item  <BRAND>-<date>-li  με "platforms": ["linkedin"]: πάει ΜΟΝΟ στο LinkedIn
-(όχι Instagram/Facebook, ούτε story, ούτε Drive). Το Apps Script το δημοσιεύει όταν υπάρχει LI_TOKEN.
+Κάθε post γίνεται item  <BRAND>-<date>-li  στο linkedin.json του repo (ΧΩΡΙΣΤΑ από το queue.json, ώστε μια
+παλιά έκδοση του Apps Script να μην τα δει ποτέ ως posts Instagram). Πάνε ΜΟΝΟ στο LinkedIn (όχι Instagram/
+Facebook, ούτε story, ούτε Drive). Το Apps Script τα δημοσιεύει όταν υπάρχει LI_TOKEN.
 
 Κανόνες κειμένου LinkedIn: ≤ 3000 χαρακτήρες (καλύτερα < 1300), οι 2 πρώτες γραμμές είναι το «άγκιστρο»
 (μετά κόβεται σε «…περισσότερα»), 3–5 hashtags στο τέλος, χωρίς @mentions και χωρίς links στο κείμενο.
@@ -67,9 +68,13 @@ def build(posts, queue_items):
 
 if __name__ == '__main__':
     posts_path, repo_dir = sys.argv[1], sys.argv[2]
-    qpath = f'{repo_dir}/queue.json'
-    q = json.load(open(qpath))
-    new = build(json.load(open(posts_path)), q['items'])
+    src = json.load(open(f'{repo_dir}/queue.json'))['items']
+    qpath = f'{repo_dir}/linkedin.json'
+    try:
+        q = json.load(open(qpath))
+    except FileNotFoundError:
+        q = {'version': 1, 'timezone': 'Europe/Athens', 'items': []}
+    new = build(json.load(open(posts_path)), src)
     ids = {i['id'] for i in new}
     q['items'] = [i for i in q['items'] if i['id'] not in ids] + [
         {k: i[k] for k in ('id', 'account', 'type', 'platforms', 'publish_at', 'images', 'video', 'title', 'caption', 'li_from') if k in i}
@@ -81,4 +86,4 @@ if __name__ == '__main__':
     for i in new:
         first = i['caption'].split('\n')[0][:70]
         print(f"{i['publish_at'][:16]}  {i['type']:8} {len(i['caption']):5} χαρ.  {first}")
-    print(len(new), 'posts LinkedIn·', len(q['items']), 'συνολικά στην ουρά')
+    print(len(new), 'posts LinkedIn·', len(q['items']), 'συνολικά στο linkedin.json')
