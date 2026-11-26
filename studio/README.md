@@ -41,3 +41,6 @@ Posts για το προσωπικό προφίλ του Πέτρου, μόνο 
 2. `captions.json` στο `<out>`: '<BRAND>|<ημ/νία>' = λεζάντα (γραμμένη από εμάς, με βάση το βίντεο και το .txt του SMM αν υπάρχει) και '<BRAND>|<ημ/νία>|reel' = {"source": "smm", title, yt_title, yt_description, tiktok_caption, yt_tags} (+ "story": false αν > 60″).
 3. Μετά την έγκριση του Πέτρου: `python3 make_queue.py <out> .. auto` (αντικαθιστά το post <BRAND>-<ημ/νία>-post) → commit & push → το mp4 της πηγής στο Drive «ΧΡΗΣΙΜΟΠΟΙΗΜΕΝΑ/<ΕΕΕΕ-ΜΜ>».
 Το Apps Script κάνει τα υπόλοιπα όπως σε κάθε reel: Facebook, story 15′ μετά, αντίγραφο με κείμενα/ετικέτες στο «REELS» για YouTube/TikTok (τα προγραμματίζει ο SMM).
+
+## Ώρες κοινού (απόφαση Πέτρου 26/11)
+Το Apps Script γράφει κάθε μέρα στην καρτέλα «Ώρες κοινού» του Sheet «IG Publisher» την καλύτερη ώρα ανά brand και μέρα της εβδομάδας. Στο μηνιαίο πακέτο: Google Sheets connector → `get_values` στο «Ώρες κοινού»!A1:G15 → σώσε το αποτέλεσμα ως JSON → `python3 audience_times.py <values.json> <out_dir>/times.json`. Το `make_queue.py` και το `build_preview.py` διαβάζουν μόνα τους το `<out_dir>/times.json`: post στην ώρα της μέρας, story 5′ μετά· ό,τι λείπει → σταθερές ώρες (`TIMES`). Τα reels του SMM μένουν 15:00. Αν δεν υπάρχει η καρτέλα ή είναι κενή, συνέχισε χωρίς `times.json` και γράψε το στις σημειώσεις της προεπισκόπησης.

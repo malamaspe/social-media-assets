@@ -1,6 +1,6 @@
 """Build queue.json entries for a rendered week and copy media into the repo working tree."""
 import json, glob, os, shutil, sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 ATH = ZoneInfo('Europe/Athens')
 REPO_RAW = 'https://raw.githubusercontent.com/malamaspe/social-media-assets/main/'
@@ -8,6 +8,29 @@ TIMES = {'NDT': ('20:00', '20:05'), 'AMAZE': ('21:00', '21:05')}
 # Reels του SMM ("source": "smm"): ΠΑΝΤΑ Παρασκευή 15:00 και στα δύο brands (απόφαση Πέτρου 21/11).
 # Παίρνουν τη θέση του post της ημέρας του brand· το story της ημέρας μένει στις :05 του κανονικού ωραρίου.
 SMM_TIME = '15:00'
+# Ώρες κοινού (απόφαση Πέτρου 26/11): αν υπάρχει <week_dir>/times.json (από το studio/audience_times.py, με βάση την
+# καρτέλα «Ώρες κοινού» του Sheet), το post μπαίνει στην καλύτερη ώρα του brand για εκείνη τη μέρα της εβδομάδας και
+# το story 5′ μετά. Ό,τι λείπει → TIMES. Τα reels του SMM μένουν πάντα 15:00.
+STORY_AFTER_MIN = 5
+
+def load_times(week_dir):
+    p = f'{week_dir}/times.json'
+    if not os.path.exists(p):
+        return {}
+    t = json.load(open(p))
+    for brand, days in t.items():
+        for k, v in days.items():
+            h, m = map(int, v.split(':'))
+            assert k in '1234567' and len(k) == 1 and 8 <= h <= 23 and 0 <= m < 60, f'times.json: {brand} {k}={v}'
+    return t
+
+def times_for(times, brand, d):
+    """(ώρα post, ώρα story) για brand και ημέρα YYYY-MM-DD."""
+    t = (times.get(brand) or {}).get(str(date.fromisoformat(d).isoweekday()))
+    if not t:
+        return TIMES[brand]
+    s = (datetime.strptime(t, '%H:%M') + timedelta(minutes=STORY_AFTER_MIN)).strftime('%H:%M')
+    return t, s
 # Προαιρετικά κείμενα για YouTube Shorts / TikTok ανά reel, στο captions.json με κλειδί '<BRAND>|<YYYY-MM-DD>|reel'.
 # Το Apps Script τα γράφει σε .txt δίπλα στο mp4, στον φάκελο Drive «ΥΛΙΚΟ SOCIAL MEDIA/REELS».
 REEL_META = ('title', 'yt_title', 'yt_description', 'tiktok_caption', 'yt_tags', 'source')
@@ -54,6 +77,7 @@ def clean_people(v, where, n_slides):
 def build(week_dir, repo_dir, month_folder, skip_reels=False):
     """month_folder: e.g. 2026-11, or 'auto' to use each day's own month."""
     caps = json.load(open(f'{week_dir}/captions.json'))
+    times = load_times(week_dir)
     items = []
     for brand in ['NDT', 'AMAZE']:
         files = glob.glob(f'{week_dir}/{brand}/*.jpg') + glob.glob(f'{week_dir}/{brand}/*.mp4')
@@ -63,7 +87,7 @@ def build(week_dir, repo_dir, month_folder, skip_reels=False):
             dst = f'{repo_dir}/media/{month}/{brand}'
             os.makedirs(dst, exist_ok=True)
             url = lambda f: f'{REPO_RAW}media/{month}/{brand}/{os.path.basename(f)}'
-            tp, ts = TIMES[brand]
+            tp, ts = times_for(times, brand, d)
             reel = f'{week_dir}/{brand}/{d}_reel.mp4'
             posts = sorted(glob.glob(f'{week_dir}/{brand}/{d}_post_*.jpg'))
             stories = sorted(glob.glob(f'{week_dir}/{brand}/{d}_story_*.jpg'))

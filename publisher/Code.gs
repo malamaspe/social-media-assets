@@ -12,6 +12,7 @@
  *   TOKEN_AMAZE     Page access token της σελίδας Amaze
  *   IG_TOKEN        ή ένα token (π.χ. System User) για όλα, με instagram_basic, instagram_content_publish,
  *                   pages_show_list, pages_read_engagement, pages_manage_posts, business_management
+ *                   και instagram_manage_insights (για τις «Ώρες κοινού»)
  *                   (αν υπάρχει TOKEN_<brand>, προτιμάται εκείνο)
  *   IG_USER_NDT     Instagram Business Account ID του newdjsteam
  *   IG_USER_AMAZE   Instagram Business Account ID του amaze.djs
@@ -46,8 +47,10 @@
  *   syncReelsNow()      αντιγράφει τώρα τα reels της ουράς στο Drive (ΥΛΙΚΟ SOCIAL MEDIA/REELS), με .txt για
  *                       YouTube Shorts / TikTok. Γίνεται και αυτόματα σε κάθε εκτέλεση του run().
  *   linkedinSetup()     μετά το LI_TOKEN: βρίσκει το προφίλ σου και δείχνει τα επόμενα posts LinkedIn (δεν δημοσιεύει)
+ *   updateAudienceHours() διαβάζει τώρα τις ώρες που το κοινό είναι online (και βάζει τον καθημερινό έλεγχο 04:00)
  *
- * Μενού «⚙️ Publisher» στο Sheet (onOpen): «LinkedIn: νέο token…», «Αλλαγή ρύθμισης…», «Δες τις ρυθμίσεις».
+ * Μενού «⚙️ Publisher» στο Sheet (onOpen): «LinkedIn: νέο token…», «Αλλαγή ρύθμισης…», «Δες τις ρυθμίσεις»,
+ * «Ώρες κοινού: ενημέρωση τώρα».
  * Χρειάζεται επειδή, με πάνω από 50 Ιδιότητες σεναρίου, η οθόνη του Apps Script τις δείχνει μόνο για ανάγνωση.
  *   setup()             βάζει τον αυτόματο έλεγχο κάθε 10 λεπτά
  *   pause() / resume()  παύση / συνέχεια
@@ -850,7 +853,7 @@ function findInstagramIds() {
 function tokenInfo_(label, t) {
   try {
     const d = api_('get', 'debug_token', { input_token: t }, t).data || {};
-    const need = ['instagram_basic', 'instagram_content_publish', 'pages_read_engagement', 'pages_manage_posts'];
+    const need = ['instagram_basic', 'instagram_content_publish', 'pages_read_engagement', 'pages_manage_posts', 'instagram_manage_insights'];
     const miss = need.filter(function (n) { return (d.scopes || []).indexOf(n) < 0; });
     const exp = !d.expires_at ? 'δεν λήγει' : 'λήγει ' + new Date(d.expires_at * 1000).toLocaleDateString('el-GR');
     console.log(label + ': ' + (d.type || '?') + ', ' + exp + ', ' + (miss.length ? 'ΛΕΙΠΟΥΝ ' + miss.join(', ') : 'δικαιώματα εντάξει') + (d.is_valid === false ? ', ΜΗ ΕΓΚΥΡΟ' : ''));
@@ -1047,6 +1050,7 @@ function onOpen() {
     .addItem('LinkedIn: νέο token…', 'menuLinkedInToken')
     .addItem('Αλλαγή ρύθμισης…', 'menuSetProperty')
     .addItem('Δες τις ρυθμίσεις', 'menuShowSettings')
+    .addItem('Ώρες κοινού: ενημέρωση τώρα', 'menuAudienceHours')
     .addToUi();
 }
 
@@ -1159,3 +1163,133 @@ function setup() {
 
 function pause() { P_().setProperty('PAUSED', 'true'); console.log('Παύση: δεν θα δημοσιευτεί τίποτα μέχρι resume().'); }
 function resume() { P_().setProperty('PAUSED', 'false'); console.log('Συνέχεια δημοσιεύσεων.'); }
+
+// ------------------------------------------------------------------ ώρες κοινού (απόφαση Πέτρου 26/11)
+// Κάθε μέρα στις ~04:00 το updateAudienceHours διαβάζει από το Instagram πόσοι ακόλουθοι είναι online ανά ώρα
+// (online_followers· το Instagram κρατάει μόνο τις τελευταίες 30 μέρες) για NDT και AMAZE και γράφει:
+//   «_online»       ακατέργαστα, ανά ημέρα και ώρα Αθήνας (κρατάει 8 εβδομάδες)
+//   «Ώρες κοινού»   καλύτερη ώρα ανά μέρα της εβδομάδας (μέσος όρος 4 εβδομάδων, μόνο 08:00–23:00)
+// Το μηνιαίο πακέτο διαβάζει την «Ώρες κοινού» και βάζει εκεί τα posts (story 5′ μετά). Χωρίς δεδομένα μένουν
+// οι σταθερές ώρες (NDT 20:00, AMAZE 21:00). Θέλει δικαίωμα instagram_manage_insights στα tokens (checkSetup).
+const AUD_ = { FETCH_DAYS: 29, KEEP_DAYS: 56, AVG_DAYS: 28, FROM_H: 8, TO_H: 23, MIN_DAYS: 2 };
+const AUD_RAW_ = '_online';
+const AUD_SUM_ = 'Ώρες κοινού';
+const AUD_ORDER_ = ['Δευ', 'Τρι', 'Τετ', 'Πεμ', 'Παρ', 'Σαβ', 'Κυρ'];
+
+// Κάθε τιμή του online_followers αφορά τη μέρα που τελειώνει στο end_time· το κλειδί "0".."23" είναι η ώρα
+// από την αρχή εκείνης της μέρας. Μετατρέπεται σε ημέρα και ώρα Αθήνας.
+function audRows_(body, acc) {
+  const out = [];
+  const vals = (((body || {}).data || [])[0] || {}).values || [];
+  vals.forEach(function (v) {
+    const val = v.value || {};
+    const end = new Date(String(v.end_time || '').replace(/([+-]\d\d)(\d\d)$/, '$1:$2')).getTime();
+    if (!end) return;
+    Object.keys(val).forEach(function (h) {
+      const d = new Date(end - 86400000 + Number(h) * 3600000);
+      out.push([acc, athens_(d, 'yyyy-MM-dd'), DAYS_SHORT_[dow_(d)], Number(athens_(d, 'H')), Number(val[h]) || 0]);
+    });
+  });
+  return out;
+}
+
+function audFetch_(acc) {
+  const now = Math.floor(Date.now() / 1000);
+  return audRows_(api_('get', igUserId_(acc) + '/insights', {
+    metric: 'online_followers', period: 'lifetime', since: now - AUD_.FETCH_DAYS * 86400, until: now,
+  }, token_(acc)), acc);
+}
+
+function audSummary_(all, now) {
+  const cut = athens_(new Date(now.getTime() - AUD_.AVG_DAYS * 86400000), 'yyyy-MM-dd');
+  const agg = {}, days = {};
+  all.forEach(function (r) {
+    if (r[1] < cut) return;
+    const k = r[0] + '|' + r[2];
+    (days[k] = days[k] || {})[r[1]] = 1;
+    if (r[3] < AUD_.FROM_H || r[3] > AUD_.TO_H) return;
+    const kk = k + '|' + r[3];
+    agg[kk] = agg[kk] || [0, 0];
+    agg[kk][0] += r[4]; agg[kk][1]++;
+  });
+  const hh = function (h) { return ('0' + h).slice(-2) + ':00'; };
+  const out = [];
+  ['NDT', 'AMAZE'].forEach(function (acc) {
+    AUD_ORDER_.forEach(function (dn) {
+      const nd = Object.keys(days[acc + '|' + dn] || {}).length;
+      const hs = [];
+      for (let h = AUD_.FROM_H; h <= AUD_.TO_H; h++) {
+        const a = agg[acc + '|' + dn + '|' + h];
+        if (a) hs.push([h, a[0] / a[1]]);
+      }
+      hs.sort(function (a, b) { return b[1] - a[1] || a[0] - b[0]; });
+      const ok = nd >= AUD_.MIN_DAYS && hs.length && hs[0][1] > 0;
+      out.push([acc, dn, ok ? hh(hs[0][0]) : '', ok ? Math.round(hs[0][1]) : '', ok && hs[1] ? hh(hs[1][0]) : '', nd,
+        athens_(now, 'yyyy-MM-dd HH:mm')]);
+    });
+  });
+  return out;
+}
+
+function audEnsureTrigger_() {
+  const has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'updateAudienceHours'; });
+  if (!has) ScriptApp.newTrigger('updateAudienceHours').timeBased().atHour(4).everyDays(1).inTimezone('Europe/Athens').create();
+}
+
+function audNotify_(msg) {
+  const h = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, msg)).slice(0, 12);
+  if (prop_('AUD_ERR', '') === h) return;
+  P_().setProperty('AUD_ERR', h);
+  const perm = /permission|\(#10\)|\(#200\)|instagram_manage_insights/i.test(msg);
+  notify_('Ώρες κοινού: δεν διαβάστηκαν', msg +
+    (perm ? '\n\nΛείπει το δικαίωμα instagram_manage_insights από τα tokens: README → Τρόπος Α (7 δικαιώματα).' : '') +
+    '\n\nΟι δημοσιεύσεις συνεχίζουν κανονικά· το πρόγραμμα κρατάει τις σταθερές ώρες (NDT 20:00, AMAZE 21:00).');
+}
+
+function updateAudienceHours() {
+  audEnsureTrigger_();
+  const now = new Date();
+  const rows = [], errs = [];
+  ['NDT', 'AMAZE'].forEach(function (acc) {
+    try { rows.push.apply(rows, audFetch_(acc)); } catch (e) { errs.push(acc + ': ' + e.message); }
+  });
+  const raw = sheet_(AUD_RAW_, ['Λογαριασμός', 'Ημέρα', 'Μέρα', 'Ώρα', 'Online']);
+  const map = {};
+  const last = raw.getLastRow();
+  if (last > 1) raw.getRange(2, 1, last - 1, 5).getValues().forEach(function (r) {
+    if (!r[0]) return;
+    const day = r[1] instanceof Date ? athens_(r[1], 'yyyy-MM-dd') : String(r[1]);
+    map[r[0] + '|' + day + '|' + Number(r[3])] = [String(r[0]), day, String(r[2]), Number(r[3]), Number(r[4]) || 0];
+  });
+  rows.forEach(function (r) { map[r[0] + '|' + r[1] + '|' + r[3]] = r; });
+  const keep = athens_(new Date(now.getTime() - AUD_.KEEP_DAYS * 86400000), 'yyyy-MM-dd');
+  const all = Object.keys(map).map(function (k) { return map[k]; })
+    .filter(function (r) { return r[1] >= keep; })
+    .sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : a[3] - b[3]; });
+  if (last > 1) raw.getRange(2, 1, last - 1, 5).clearContent();
+  if (all.length) {
+    raw.getRange(2, 2, all.length, 1).setNumberFormat('@');
+    raw.getRange(2, 1, all.length, 5).setValues(all);
+  }
+  const sum = audSummary_(all, now);
+  const sh = sheet_(AUD_SUM_, ['Λογαριασμός', 'Μέρα', 'Καλύτερη ώρα', 'Online (μ.ό.)', '2η καλύτερη', 'Μέρες δεδομένων', 'Ενημέρωση']);
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 7).clearContent();
+  sh.getRange(2, 1, sum.length, 7).setNumberFormat('@');
+  sh.getRange(2, 1, sum.length, 7).setValues(sum.map(function (r) { return r.map(String); }));
+  if (errs.length) audNotify_(errs.join('\n')); else P_().deleteProperty('AUD_ERR');
+  console.log('Ώρες κοινού: ' + rows.length + ' νέες μετρήσεις' + (errs.length ? ' · ΣΦΑΛΜΑ: ' + errs.join(' | ') : ''));
+  return errs;
+}
+
+function menuAudienceHours() {
+  const errs = updateAudienceHours();
+  const sh = SpreadsheetApp.getActive().getSheetByName(AUD_SUM_);
+  if (sh) sh.activate();
+  if (errs.length) {
+    SpreadsheetApp.getUi().alert('Ώρες κοινού', 'Δεν διαβάστηκαν:\n' + errs.join('\n') +
+      (/permission|\(#10\)|\(#200\)/i.test(errs.join(' ')) ? '\n\nΛείπει το δικαίωμα instagram_manage_insights από τα tokens (README → Τρόπος Α).' : ''),
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  } else {
+    SpreadsheetApp.getActive().toast('Έτοιμο. Από εδώ και πέρα ενημερώνεται μόνο του κάθε μέρα στις 04:00.', 'Ώρες κοινού', 8);
+  }
+}

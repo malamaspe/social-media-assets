@@ -17,18 +17,18 @@ publisher/appsscript.json  manifest του Apps Script
 ## Εγκατάσταση (μία φορά, ~20 λεπτά)
 
 ### 1. Token από το Meta
-Εφαρμογή Meta: **NDT Social Publisher** (Live), με τα use cases «Manage everything on your Page» και «Manage messaging & content on Instagram» (API setup with Facebook login). Χρειάζονται τα δικαιώματα `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `business_management`.
+Εφαρμογή Meta: **NDT Social Publisher** (Live), με τα use cases «Manage everything on your Page» και «Manage messaging & content on Instagram» (API setup with Facebook login). Χρειάζονται τα δικαιώματα `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `business_management` και (από 26/11, για τις «Ώρες κοινού») `instagram_manage_insights`. Αν το `instagram_manage_insights` δεν εμφανίζεται στο Graph API Explorer: developers.facebook.com/apps → NDT Social Publisher → Use cases → «Manage messaging & content on Instagram» → Customize → Permissions → `instagram_manage_insights` → Add.
 
 **Τρόπος Α (προτεινόμενος, χωρίς SMS): μόνιμα tokens σελίδας**
-1. developers.facebook.com/tools/explorer → Meta App: **NDT Social Publisher** → «User or Page»: **User Token** → πρόσθεσε τα 6 δικαιώματα → **Generate Access Token** → στο παράθυρο του Facebook επίλεξε τις δύο σελίδες και τα δύο Instagram → Συνέχεια.
+1. developers.facebook.com/tools/explorer → Meta App: **NDT Social Publisher** → «User or Page»: **User Token** → πρόσθεσε τα 7 δικαιώματα → **Generate Access Token** → στο παράθυρο του Facebook επίλεξε τις δύο σελίδες και τα δύο Instagram → Συνέχεια.
 2. Αντέγραψε το token → developers.facebook.com/tools/debug/accesstoken → **Debug** → κάτω κάτω **Extend Access Token** → αντέγραψε το νέο token (λήγει σε ~60 μέρες, είναι μόνο ενδιάμεσο).
 3. Πίσω στο Graph API Explorer: επικόλλησε το νέο token στο πεδίο Access Token, γράψε στο ερώτημα `me/accounts?fields=name,access_token` → **Submit**.
 4. Για κάθε σελίδα αντιγράφεις το `access_token` της. Στο Debugger πρέπει να γράφει **Type: Page, Expires: Never**.
-5. Στις Ιδιότητες σεναρίου: `TOKEN_NDT` = το token της NDT, `TOKEN_AMAZE` = το token της Amaze.
+5. Στο Sheet: μενού ⚙️ Publisher → «Αλλαγή ρύθμισης…»: `TOKEN_NDT` = το token της NDT, μετά `TOKEN_AMAZE` = το token της Amaze (η οθόνη Ιδιότητες σεναρίου είναι μόνο για ανάγνωση με πάνω από 50 ιδιότητες).
 
 Τα tokens σελίδας δεν λήγουν. Σταματούν μόνο αν αλλάξεις κωδικό στο Facebook ή χάσεις τον ρόλο σου στη σελίδα: τότε έρχεται email σφάλματος και επαναλαμβάνεις τα βήματα 1–5.
 
-**Τρόπος Β: System User token** (business.facebook.com/settings → Χρήστες συστήματος → NDTautopost → Δημιουργία διακριτικού, λήξη «Ποτέ», τα 6 δικαιώματα). Μπαίνει ως `IG_TOKEN`. Θέλει επαλήθευση με SMS.
+**Τρόπος Β: System User token** (business.facebook.com/settings → Χρήστες συστήματος → NDTautopost → Δημιουργία διακριτικού, λήξη «Ποτέ», τα 7 δικαιώματα). Μπαίνει ως `IG_TOKEN`. Θέλει επαλήθευση με SMS.
 
 ### 2. Google Sheet + Apps Script
 1. Νέο Google Sheet με όνομα **IG Publisher**.
@@ -67,3 +67,9 @@ publisher/appsscript.json  manifest του Apps Script
 Workflow `.github/workflows/deploy-publisher.yml` (όπως στην NDT OPS): κάθε push στο `main` που αλλάζει τον φάκελο `publisher/` ανεβάζει τον κώδικα στο Apps Script του Sheet «IG Publisher» με clasp, ενημερώνει τη web app της συντόμευσης (Upload.gs) στο ίδιο link και επαληθεύει. Αν κάποιος άλλαξε κώδικα απευθείας στον editor, σταματά χωρίς να ανεβάσει τίποτα. Οι Ιδιότητες σεναρίου και οι triggers δεν αγγίζονται.
 - Μία φορά: secrets `CLASPRC_JSON` (περιεχόμενο του `~/.clasprc.json`, ίδιο με της OPS) και `IG_SCRIPT_ID` (Apps Script → Ρυθμίσεις έργου → Script ID). Μετά Actions → Deploy publisher → Run workflow με `check`, και αν οι διαφορές είναι οι αναμενόμενες, με `force`.
 - Αν ένα νέο Code.gs ζητά νέα δικαιώματα, ο κώδικας ανεβαίνει, το workflow βγαίνει «αποτυχία» (έρχεται email) και θέλει μία έγκριση από το μενού ⚙️ Publisher.
+
+## Ώρες κοινού (από 26/11)
+Κάθε μέρα στις 04:00 το `updateAudienceHours` διαβάζει από το Instagram πόσοι ακόλουθοι κάθε brand είναι online ανά ώρα (τελευταίες 30 μέρες) και γράφει στο Sheet την καρτέλα **Ώρες κοινού**: καλύτερη ώρα ανά μέρα της εβδομάδας (μέσος όρος 4 εβδομάδων, 08:00–23:00). Το μηνιαίο πακέτο βάζει εκεί τα posts και τα stories (5′ μετά). Χωρίς δεδομένα ή με λιγότερες από 2 μετρήσεις για μια μέρα → σταθερή ώρα (NDT 20:00, AMAZE 21:00). Τα reels του SMM μένουν Παρασκευή 15:00, το LinkedIn 08:45.
+- Θέλει το δικαίωμα `instagram_manage_insights` στα `TOKEN_NDT` / `TOKEN_AMAZE` (Τρόπος Α με 7 δικαιώματα· το `checkSetup` γράφει «ΛΕΙΠΟΥΝ» αν δεν υπάρχει).
+- Πρώτη φορά: μενού ⚙️ Publisher → «Ώρες κοινού: ενημέρωση τώρα» (βάζει και τον καθημερινό έλεγχο).
+- Η καρτέλα `_online` κρατάει τα ακατέργαστα στοιχεία 8 εβδομάδων. Σφάλμα → ένα email (όχι κάθε μέρα)· οι δημοσιεύσεις δεν επηρεάζονται.

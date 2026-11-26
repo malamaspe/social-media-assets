@@ -4,11 +4,14 @@ Usage: python3 build_preview.py <week_dir> <out_dir> "<title>" "<subtitle>" <not
 import sys, os, json, glob, html, re
 from datetime import date
 from PIL import Image
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from make_queue import load_times, times_for, SMM_TIME
 
 week_dir, out_dir, title, subtitle, notes_file = sys.argv[1:6]
 css = re.search(r'<style>(.*?)</style>', open('preview/index.html').read(), re.S).group(1)
 caps = json.load(open(os.path.join(week_dir, 'captions.json')))
 notes = open(notes_file).read() if os.path.exists(notes_file) else ''
+times = load_times(week_dir)
 DAYS = ['Δευτέρα', 'Τρίτη', 'Τετάρτη', 'Πέμπτη', 'Παρασκευή', 'Σάββατο', 'Κυριακή']
 os.makedirs(os.path.join(out_dir, 'img'), exist_ok=True)
 
@@ -19,8 +22,8 @@ def thumb(path):
 
 parts = []
 for brand, label, color in [('NDT', 'NDT', '#FF6A00'), ('AMAZE', 'Amaze DJs', '#C8A97E')]:
-    t = '20:00' if brand == 'NDT' else '21:00'
-    parts.append(f"<section id='{brand.lower()}'><h2 style='border-color:{color}'>{label} <span>· post {t}, story {t[:3]}05</span></h2>")
+    hdr = 'ώρες ανά μέρα (ώρες κοινού)' if times.get(brand) else ('post 20:00, story 20:05' if brand == 'NDT' else 'post 21:00, story 21:05')
+    parts.append(f"<section id='{brand.lower()}'><h2 style='border-color:{color}'>{label} <span>· {hdr}</span></h2>")
     dates = sorted({os.path.basename(f)[:10] for f in glob.glob(f'{week_dir}/{brand}/*.jpg') + glob.glob(f'{week_dir}/{brand}/*.mp4')})
     for d in dates:
         posts = sorted(glob.glob(f'{week_dir}/{brand}/{d}_post_*.jpg'))
@@ -41,7 +44,10 @@ for brand, label, color in [('NDT', 'NDT', '#FF6A00'), ('AMAZE', 'Amaze DJs', '#
             imgs = ''.join(f"<img src='{thumb(p)}' loading='lazy'>" for p in posts)
         st = ''.join(f"<div class='stw'><div class='lbl'>Story</div><img class='st' src='{thumb(s)}' loading='lazy'></div>" for s in story)
         cap = html.escape(caps.get(f'{brand}|{d}', ''))
-        parts.append(f"<article><div class='day'>{DAYS[dt.weekday()]} {dt.day}/{dt.month} <em>{kind}</em></div>"
+        tp, ts = times_for(times, brand, d)
+        if (caps.get(f'{brand}|{d}|reel') or {}).get('source') == 'smm':
+            tp = SMM_TIME
+        parts.append(f"<article><div class='day'>{DAYS[dt.weekday()]} {dt.day}/{dt.month} <em>{kind} · {tp} · story {ts}</em></div>"
                      f"<div class='row'><div class='car'>{imgs}</div>{st}</div>"
                      f"<details><summary>Λεζάντα</summary><pre>{cap}</pre></details></article>")
     parts.append('</section>')
